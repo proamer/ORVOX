@@ -2,6 +2,7 @@
   "name": "@orvox/compiler",
   "description": "TypeScript AST compiler for ORVOX applications",
   "version": "0.1.0-alpha.0",
+  "license": "MIT",
   "type": "module",
   "exports": "./src/index.ts",
   "types": "./src/index.ts",

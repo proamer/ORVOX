@@ -2,6 +2,7 @@
   "name": "@orvox/schema",
   "description": "Compile-time schema DSL for ORVOX",
   "version": "0.1.0-alpha.0",
+  "license": "MIT",
   "type": "module",
   "exports": "./src/index.ts",
   "types": "./src/index.ts",

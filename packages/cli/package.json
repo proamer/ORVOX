@@ -2,6 +2,7 @@
   "name": "@orvox/cli",
   "description": "Build and development CLI for ORVOX",
   "version": "0.1.0-alpha.0",
+  "license": "MIT",
   "type": "module",
   "exports": "./src/index.ts",
   "files": ["src"],
