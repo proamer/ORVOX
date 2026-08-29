@@ -237,7 +237,7 @@ Benchmarks need [`oha`](https://github.com/hatoo/oha) installed. The smoke run v
 pnpm bench:smoke
 ```
 
-Publishing is manual and gated. `pnpm pack:alpha` writes local tarballs to `artifacts/` for inspection; the [publish workflow](.github/workflows/publish.yml) is `workflow_dispatch`-only and requires an `NPM_TOKEN`.
+Publishing is manual and gated. `pnpm pack:alpha` writes local tarballs to `artifacts/` for inspection; the [publish workflow](.github/workflows/publish.yml) is `workflow_dispatch`-only. It holds no npm secret — releases authenticate through npm trusted publishing (OIDC), so every published version carries SLSA provenance tying it back to the commit and workflow run that built it.
 
 Design decisions are recorded in [docs/decisions](docs/decisions); the compiler pipeline is sketched in [docs/architecture.md](docs/architecture.md).
 

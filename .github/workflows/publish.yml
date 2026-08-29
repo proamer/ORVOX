@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm trusted publishing (OIDC); without it pnpm skips OIDC and falls back to NPM_TOKEN
+  id-token: write # npm trusted publishing (OIDC); this is the only publish credential
 
 jobs:
   publish:
@@ -23,20 +23,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - name: Require npm token
-        run: test -n "$NODE_AUTH_TOKEN"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Auth comes from the id-token permission above via npm trusted publishing.
+      # There is no secret to supply, and each publish carries SLSA provenance.
       - run: pnpm --filter @orvox/schema publish --access public --tag alpha --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: pnpm --filter @orvox/core publish --access public --tag alpha --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: pnpm --filter @orvox/compiler publish --access public --tag alpha --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: pnpm --filter @orvox/cli publish --access public --tag alpha --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
