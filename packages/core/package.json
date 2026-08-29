@@ -3,6 +3,7 @@
   "description": "Compile-first Bun HTTP framework",
   "version": "0.1.0-alpha.1",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/proamer/ORVOX.git", "directory": "packages/core" },
   "type": "module",
   "exports": "./src/index.ts",
   "types": "./src/index.ts",

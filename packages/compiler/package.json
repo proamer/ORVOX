@@ -3,6 +3,7 @@
   "description": "TypeScript AST compiler for ORVOX applications",
   "version": "0.1.0-alpha.1",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/proamer/ORVOX.git", "directory": "packages/compiler" },
   "type": "module",
   "exports": "./src/index.ts",
   "types": "./src/index.ts",
