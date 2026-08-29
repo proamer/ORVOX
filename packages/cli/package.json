@@ -1,0 +1,16 @@
+{
+  "name": "@orvox/cli",
+  "description": "Build and development CLI for ORVOX",
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "files": ["src"],
+  "engines": { "bun": ">=1.4.0" },
+  "publishConfig": { "access": "public" },
+  "bin": {
+    "orvox": "./src/index.ts"
+  },
+  "dependencies": {
+    "@orvox/compiler": "workspace:*"
+  }
+}

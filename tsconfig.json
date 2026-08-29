@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun"],
+    "baseUrl": ".",
+    "paths": {
+      "@orvox/core": ["packages/core/src/index.ts"],
+      "@orvox/compiler": ["packages/compiler/src/index.ts"],
+      "@orvox/schema": ["packages/schema/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/**/*.ts",
+    "fixtures/**/*.ts",
+    "examples/**/*.ts",
+    "benchmarks/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    ".orvox/**/*.ts"
+  ]
+}

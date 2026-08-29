@@ -1,0 +1,30 @@
+{
+  "name": "orvox",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "orvox": "bun packages/cli/src/index.ts",
+    "build:fixture": "bun packages/cli/src/index.ts build fixtures/basic/src/app.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:compiler": "bun test tests/compiler.test.ts tests/golden.test.ts",
+    "test:integration": "bun test tests/integration.test.ts",
+    "bench": "bun scripts/bench.ts",
+    "bench:smoke": "bun scripts/bench.ts --smoke",
+    "bench:report": "bun scripts/report-benchmark.ts",
+    "pack:alpha": "bun scripts/pack-alpha.ts",
+    "check": "pnpm build:fixture && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "bun": "1.4.0",
+    "elysia": "1.4.30",
+    "hono": "4.13.5",
+    "typescript": "5.9.3"
+  }
+}

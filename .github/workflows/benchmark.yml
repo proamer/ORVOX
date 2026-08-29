@@ -1,0 +1,39 @@
+name: benchmark
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: cargo install oha --version 1.15.0 --locked
+      - run: pnpm bench
+      - id: result
+        shell: bash
+        run: echo "path=$(ls -t benchmarks/results/*.json | head -n 1)" >> "$GITHUB_OUTPUT"
+      - run: pnpm exec bun scripts/report-benchmark.ts "${{ steps.result.outputs.path }}" --output benchmark-summary.md
+      - run: cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orvox-benchmark-${{ github.run_id }}
+          path: |
+            ${{ steps.result.outputs.path }}
+            benchmark-summary.md
+
