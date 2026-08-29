@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <code>0.1.0-alpha.0</code> · MIT · requires Bun 1.4+
+  <code>0.1.0-alpha.1</code> · MIT · requires Bun 1.4+
 </p>
 
 ---

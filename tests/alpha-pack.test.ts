@@ -27,7 +27,7 @@ test("packs alpha packages and runs CRUD from a clean install", async () => {
   const names = ["schema", "core", "compiler", "cli"];
   const tarballs = Object.fromEntries(names.map(name => [
     name,
-    join(artifacts, `orvox-${name}-0.1.0-alpha.0.tgz`),
+    join(artifacts, `orvox-${name}-0.1.0-alpha.1.tgz`),
   ]));
   for (const tarball of Object.values(tarballs)) {
     expect((await Bun.file(tarball).exists())).toBe(true);

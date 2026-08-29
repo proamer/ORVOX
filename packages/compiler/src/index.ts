@@ -1654,7 +1654,7 @@ const generateOpenAPI = (routes: CompiledRoute[]): OpenAPIDocument => {
   }
   return {
     openapi: "3.1.0",
-    info: { title: "ORVOX API", version: "0.1.0-alpha.0" },
+    info: { title: "ORVOX API", version: "0.1.0-alpha.1" },
     paths,
   };
 };

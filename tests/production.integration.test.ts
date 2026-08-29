@@ -120,7 +120,7 @@ test("emits deterministic OpenAPI and writes the artifact", async () => {
   const result = compileSource(apiSource, { entryPath: "src/app.ts" });
   expect(result.openapi).toEqual({
     openapi: "3.1.0",
-    info: { title: "ORVOX API", version: "0.1.0-alpha.0" },
+    info: { title: "ORVOX API", version: "0.1.0-alpha.1" },
     paths: {
       "/users/{id}": {
         post: {
