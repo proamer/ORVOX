@@ -207,7 +207,8 @@ An architectural comparison, not a benchmark result. For numbers, run the lab yo
 - [x] Production runtime — `onRequest` / `onError` / `onStop`, body-size limits, graceful shutdown
 - [x] WebSockets — compile-time route-id dispatch onto Bun's native handler
 - [x] OpenAPI 3.1 as a deterministic build artifact
-- [ ] Tree-shaking of unused emitted helpers
+
+Emitted helpers are already conditional: `__orvoxResponse`, the validation error builders, and the global header table appear only when a route actually reaches them, and compiled schema and middleware declarations are erased once nothing references them. Dead code *you* wrote is kept verbatim — the compiler copies your non-route statements straight through instead of guessing at reachability. If that matters, run the output through `bun build --minify`, which shakes better than anything worth reimplementing here.
 
 ## Packages
 
@@ -242,4 +243,4 @@ Design decisions are recorded in [docs/decisions](docs/decisions); the compiler 
 
 ## License
 
-MIT © I'm PROAMER — see [LICENSE](LICENSE).
+MIT © PROAMER — see [LICENSE](LICENSE).
