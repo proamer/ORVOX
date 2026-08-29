@@ -1,102 +1,82 @@
-# ORVOX
+<p align="center">
+  <img src="docs/assets/orvox_banner.png" alt="ORVOX" width="100%">
+</p>
 
-**A compile-first TypeScript HTTP framework for Bun that outputs highly optimized, native `Bun.serve` code.**
+<p align="center">
+  <strong>A compile-first HTTP framework for Bun.</strong><br>
+  Routes, schemas, and middleware are resolved at build time into a single readable <code>Bun.serve</code> file.
+</p>
 
-Orvox shifts the heavy computational overhead of runtime path-parameter routing and schema parsing entirely to build-time. The server you publish to production is not an engine dynamically parsing schema manifests on every request, but a clean, fully inspectable, standalone script.
-
----
-
-### The Paradigm Shift: AOT Compilation vs Runtime Parsing
-
-Traditional Node.js and Bun frameworks consume substantial runtime clock cycles validating incoming payloads and running recursive route traversals:
-
-```
-Request ──> Extract Path ──> Execute RegExp/Trie Traversals ──> Run Dynamic Validation Engine (Zod/TypeBox) ──> Handler
-```
-
-Orvox strips this entire runtime virtualization layer:
-
-```
-Request ──> O(1) Native Server Path Table Lookup ──> Static Inlined Validation Statements ──> Direct Clean Handler
-```
-
-- **0ms Runtime Route Matching**: The compilation step constructs a static routes dictionary consumed directly by native Bun APIs.
-- **Inlined Payload Validation**: Your schemas are compiled into raw JavaScript conditional statements inside the generated file—no slow, memory-intensive parser code is imported or executed at runtime.
-- **Inspectable Output**: Built artifacts contain clear and highly readable JavaScript/TypeScript. Every line of generated middleware, validation, and route-handling is completely visible and customizable.
+<p align="center">
+  <code>0.1.0-alpha.0</code> · MIT · requires Bun 1.4+
+</p>
 
 ---
 
-### Comparison Matrix
+## What it actually does
 
-| Feature                  |         **Orvox ⚡**          |        Elysia         |         Hono          |     Bun.serve (Raw)      |
-| :----------------------- | :---------------------------: | :-------------------: | :-------------------: | :----------------------: |
-| **Routing Architecture** |     **AOT Compiled O(1)**     | Runtime Dynamic Tree  | Runtime Dynamic Trie  | Native Prefix Map / O(1) |
-| **Validation Overhead**  | **Inlined `if` conditionals** | Runtime JIT (TypeBox) | Runtime Parsing (Zod) |   None (Manual checks)   |
-| **Inspectability**       | **Fully transparent output**  | Deep stack / Blackbox | Deep stack / Blackbox |    Fully transparent     |
-| **Cold-Start Latency**   | **Instant (Zero-dependency)** |  Higher (Module JIT)  | Higher (JIT/Parsers)  |         Instant          |
-| **OpenAPI Generation**   |   **Static build artifact**   |  Dynamic schema loop  | Manual configurations |    Manual custom work    |
+Most frameworks re-derive the same answers on every request: walk a route trie, interpret a schema object, iterate a middleware array. ORVOX does that work once, at build time, and writes out the result.
 
----
+```
+Runtime frameworks
+Request ──> parse path ──> trie/regexp traversal ──> schema interpreter ──> middleware loop ──> handler
 
-### Workspace Architecture
+ORVOX
+Request ──> native Bun route table ──> inlined if-statements ──> straight-line calls ──> handler
+```
 
-Orvox is engineered as a clean, public-ready monorepo structured via a pnpm-workspace in [pnpm-workspace.yaml](pnpm-workspace.yaml). The codebase is divided into independent, publishable packages:
+- **Routes become a literal object** handed straight to `Bun.serve({ routes })`. There is no matcher in your server — Bun's own path table does the lookup.
+- **Schemas become `if` statements.** No validator library is imported or shipped. `t.object({ name: t.string({ min: 2 }) })` compiles down to a `typeof` check and a `.length` check.
+- **Middleware becomes straight-line code.** `header()` values are baked into the response, `guard()` becomes an early `return`, `derive()` becomes a named local. No array is iterated at runtime.
+- **Nothing else is materialized.** A handler that never touches `query` gets no `new URL()` call. One that reads a single header gets one `headers.get()`, not a whole header object.
 
-- **[@orvox/schema](packages/schema/package.json)** — Core types and AST schema structures used to declare request fields.
-- **[@orvox/core](packages/core/package.json)** — Tiny web app runner API, path binders, and global routing interfaces.
-- **[@orvox/compiler](packages/compiler/package.json)** — The core compiler module containing AST code generators, code emitters, and OpenAPI builders.
-- **[@orvox/cli](packages/cli/package.json)** — Developer CLI manager and build-watcher orchestrator.
+The output is a plain TypeScript file you can open, read, and step through in a debugger. If the compiler makes a bad decision, you can see it.
 
-The complete root configuration is managed in [package.json](package.json).
-
----
-
-### Installation & Quick Start
-
-#### 1. Install dependencies
-
-Deploying Orvox into your standalone application requires downloading the runtime framework and its corresponding build tool:
+## Quick start
 
 ```bash
-# Using pnpm
-pnpm add @orvox/core@alpha
-pnpm add -D @orvox/cli@alpha
-
-# Using npm
-npm install @orvox/core@alpha
-npm install --save-dev @orvox/cli@alpha
-
-# Using bun
 bun add @orvox/core@alpha
+```
+
+```bash
 bun add -d @orvox/cli@alpha
 ```
 
-#### 2. Define, Compile, & Serve
+Write `src/app.ts`:
 
-1. Define your web server entry point in a source file, for example, `src/app.ts`.
-2. Compile your declarative source code into highly performant server execution code:
+```ts
+import { orvox, t } from "@orvox/core";
 
-   ```bash
-   # Using pnpm
-   pnpm exec orvox build src/app.ts
+const app = orvox();
 
-   # Using npm (via npx)
-   npx orvox build src/app.ts
+app.get("/", () => "hello");
+app.get("/users/:id", ({ params }) => ({ id: params.id }));
 
-   # Using bun (via bunx)
-   bunx orvox build src/app.ts
-   ```
+app.post("/users", {
+  body: t.object({ name: t.string({ min: 1 }), age: t.int({ min: 0 }) }),
+  handler: ({ body }) => Response.json(body, { status: 201 }),
+});
 
-3. Run the optimized native Bun server:
-   ```bash
-   bun .orvox/server.generated.ts
-   ```
+export default app;
+```
 
----
+Compile it, then run what came out:
 
-### Code Compilation Showcase
+```bash
+bunx orvox build src/app.ts
+```
 
-#### Declared Application Source Code (`src/app.ts`)
+```bash
+bun .orvox/server.generated.ts
+```
+
+`orvox dev src/app.ts` does the same on a watcher, rebuilding and restarting on every save.
+
+> `@orvox/core` is a set of typed compile markers, not a runtime. Running `bun src/app.ts` directly starts nothing — the server is `.orvox/server.generated.ts`.
+
+## What the compiler emits
+
+Given this input:
 
 ```ts
 import { header, orvox, t } from "@orvox/core";
@@ -118,24 +98,7 @@ app.post("/users", {
 export default app;
 ```
 
-#### Run the Compiler (Example)
-
-Before deploying, compile your application to reify static handler files:
-
-```bash
-# Using pnpm
-pnpm exec orvox build src/app.ts
-
-# Using npm
-npx orvox build src/app.ts
-
-# Using Bun
-bunx orvox build src/app.ts
-```
-
-#### Compiled Output File (`.orvox/server.generated.ts`)
-
-Real output, abridged only where the per-property checks repeat:
+You get this — real output, abridged only where the per-property checks repeat:
 
 ```ts
 // Generated by ORVOX. Do not edit.
@@ -199,89 +162,84 @@ export const server = Bun.serve({
 });
 ```
 
-A live, fully executable CRUD example is available in [examples/crud/src/app.ts](examples/crud/src/app.ts).
+A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/crud/src/app.ts).
 
----
+## Build output
 
-### Project Layout & Build Artifacts
+`orvox build` writes four files to `.orvox/`:
 
-Running `orvox build` reifies a dedicated, non-hidden `.orvox/` directory at your root containing four primary compile-time products:
+| File | What it is |
+| --- | --- |
+| `server.generated.ts` | The server. This is the only file you deploy and run. |
+| `openapi.json` | OpenAPI 3.1, generated from the same IR the validators come from. |
+| `routes.manifest.json` | Every route with its params, flattened middleware, response mode, and the exact request data it reads. |
+| `analysis.json` | Compiler warnings — dynamic context access, block-handler fallbacks, late global middleware. |
 
-- `server.generated.ts` — The clean, dependency-free code serving requests.
-- `openapi.json` — Pre-calculated OpenAPI 3.1 schema specification.
-- `routes.manifest.json` — Manifest of compiled path rules and internal routing metadata.
-- `analysis.json` — Static compiler diagnostics and optimization recommendations.
+`routes.manifest.json` is worth reading. Its `needs` block tells you precisely what each route pulls off the request, which is usually where a surprise is hiding.
 
----
+## How it compares
 
-### Local Development Flow
+An architectural comparison, not a benchmark result. For numbers, run the lab yourself — see [benchmarks/README.md](benchmarks/README.md).
 
-For engineers looking to contribute, modify the framework parts, or audit the compiler engines locally:
+| | **ORVOX** | Elysia | Hono | Raw `Bun.serve` |
+| :-- | :-: | :-: | :-: | :-: |
+| **Route matching** | Native Bun route table, built at compile time | Runtime dynamic tree | Runtime trie | Native route table, hand-written |
+| **Validation** | Inlined `if` statements | Runtime JIT (TypeBox) | Runtime parsing (Zod) | Hand-written |
+| **Middleware** | Flattened into the handler | Runtime chain | Runtime chain | None |
+| **Deployed dependencies** | None — the output imports nothing | Framework + validator | Framework + validator | None |
+| **Inspectability** | The whole server is one readable file | Framework internals | Framework internals | Full |
+| **OpenAPI** | Build artifact | Runtime schema walk | Manual | Manual |
 
-#### Initial Setup & Checks
+## Alpha semantics worth knowing
 
-Ensure Bun 1.4+ and pnpm are installed to initiate packages:
+- **Bodies are closed.** Object schemas reject undeclared properties with a `400` / `unknown_property` issue, so nothing can smuggle extra fields into a handler and `Infer<>` is exactly what arrives. OpenAPI mirrors this with `additionalProperties: false`.
+- **`app.use()` is positional.** Global middleware applies to the routes declared *after* it. Declaring it late is legal but raises `ORVOX_LATE_GLOBAL_MIDDLEWARE` in `analysis.json`.
+- **`header()` covers the whole route.** Static headers reach handler results, guard short-circuits, and validation `400`s alike. Globally registered ones also reach the fallback `404` / `405` / `OPTIONS` and the error handler.
+- **Groups do not nest.** `group.group()` and `group.use()` fail the build with `ORVOX_STATIC_DSL_REQUIRED` instead of silently dropping routes.
+- **Everything must be statically readable.** Route paths, schemas, middleware, and hooks are top-level literal declarations with inline handlers. The compiler refuses what it cannot see rather than guessing.
+- **Schema bounds are integers**, in both the compiler and the runtime descriptors.
 
-```powershell
-# Clone the repository, then configure dependencies
+## Feature status
+
+- [x] Compile-time router — `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `raw`, and typed path params
+- [x] Compiled validation — objects, arrays, optionals, string/integer bounds, closed bodies
+- [x] Flattened middleware — `header()`, `guard()`, `derive()`, and `group()` prefixes
+- [x] Production runtime — `onRequest` / `onError` / `onStop`, body-size limits, graceful shutdown
+- [x] WebSockets — compile-time route-id dispatch onto Bun's native handler
+- [x] OpenAPI 3.1 as a deterministic build artifact
+- [ ] Tree-shaking of unused emitted helpers
+
+## Packages
+
+| Package | Role |
+| --- | --- |
+| [@orvox/schema](packages/schema/package.json) | Schema DSL (`t.object`, `t.string`, …) and `Infer<>` |
+| [@orvox/core](packages/core/package.json) | Typed app surface: routes, middleware, hooks, WebSockets |
+| [@orvox/compiler](packages/compiler/package.json) | AST analysis, code emission, OpenAPI generation |
+| [@orvox/cli](packages/cli/package.json) | `orvox build`, `orvox inspect`, `orvox dev` |
+
+## Working on ORVOX
+
+```bash
 pnpm install
+```
 
-# Run type checkers, compiler validation tests, and test suites
+```bash
 pnpm check
 ```
 
-The unified validation suite runs type-checking, compiles the basic sample, and triggers Bun unit tests across modules.
+`pnpm check` compiles the fixture app, type-checks the workspace *including the generated server*, and runs the full Bun test suite. It is the same gate CI runs.
 
-#### Performance Analysis and Smoke Testing
+Benchmarks need [`oha`](https://github.com/hatoo/oha) installed. The smoke run verifies all four frameworks serve identical responses before any timing is trusted:
 
-We maintain standard benchmark scripts to compare performance objectively against other high-end libraries like Elysia and Hono using standard benchmarks under the benchmarks directory:
-
-```powershell
-# Run smoke server benchmarks
+```bash
 pnpm bench:smoke
 ```
 
-_(Review [benchmarks/README.md](benchmarks/README.md) for environment requirements, duration configurations, and reporting scripts)._
+Publishing is manual and gated. `pnpm pack:alpha` writes local tarballs to `artifacts/` for inspection; the [publish workflow](.github/workflows/publish.yml) is `workflow_dispatch`-only and requires an `NPM_TOKEN`.
 
----
+Design decisions are recorded in [docs/decisions](docs/decisions); the compiler pipeline is sketched in [docs/architecture.md](docs/architecture.md).
 
-### Publishing & Release Pipeline
+## License
 
-The distribution of core CLI, Schema, and Compiler packages to public npm repositories is managed via continuous integration pipelines.
-
-#### Local Dry-Run Pack Verification
-
-Before publishing, packages can be compiled and packed locally to check package contents, sizes, and structure integrity using [scripts/pack-alpha.ts](scripts/pack-alpha.ts):
-
-```powershell
-# Compile and output local deployment tarballs under artifacts/
-pnpm pack:alpha
-```
-
-#### CI/CD Workflows
-
-- **Code Integrity Check**: The workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) executes on every push and pull request to ensure types and tests pass on any modification.
-- **Automated Public Release**: The release action in [.github/workflows/publish.yml](.github/workflows/publish.yml) uses GitHub Actions workflows to deploy tagged releases. To initiate a release:
-  1. Go to the Actions tab on the GitHub Repository.
-  2. Select the `publish alpha` workflow.
-  3. Run the workflow manually (requires repository owner access and `NPM_TOKEN` organization secret setup).
-  4. The workflow automatically publishes updated public versions of `@orvox/schema`, `@orvox/core`, `@orvox/compiler`, and `@orvox/cli` to the public registry.
-
----
-
-### Current Support Matrix
-
-- [x] **Type-Safe Dynamic Router**: Compile-time GET, POST, PUT, PATCH, DELETE and path param parsing
-- [x] **High-Speed Validator compiler**: Objects, Arrays, Inputs, and custom limits
-- [x] **Flat-Tree Middleware Pipeline**: Global decorators (`header()`), secured guards, and data derivation
-- [x] **Automatic Spec Reification**: Compiles and outputs clean OpenAPI 3.1 documents at build-time
-- [x] **WebSockets integration**: Fast connection bindings mapping to Bun's native protocol handler
-- [ ] **Tree-shaking Optimizer**: Automatic pruning of unused module branches inside emitted helpers
-
-### Alpha Semantics You Should Know
-
-- **Bodies are closed.** Object schemas reject undeclared properties with a `400` / `unknown_property` issue, so a request can never smuggle extra fields into a handler. OpenAPI output mirrors this with `additionalProperties: false`.
-- **`app.use()` is positional.** Global middleware applies only to routes declared *after* it, exactly as written. Declaring it late is legal but emits an `ORVOX_LATE_GLOBAL_MIDDLEWARE` warning in `.orvox/analysis.json`.
-- **`header()` middleware covers the whole route.** Static headers are attached to handler results, guard short-circuits, and validation `400`s alike. Headers registered globally also reach the fallback `404` / `405` / `OPTIONS` responses and the error handler.
-- **Groups do not nest.** `app.group()` accepts routes only; `group.group()` and `group.use()` fail the build with `ORVOX_STATIC_DSL_REQUIRED` rather than silently dropping routes.
-- **Schema bounds are integers.** `min` / `max` are integer literals in both the compiler and the runtime descriptors.
+MIT © I'm PROAMER — see [LICENSE](LICENSE).
