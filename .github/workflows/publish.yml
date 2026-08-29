@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # npm trusted publishing (OIDC); without it pnpm skips OIDC and falls back to NPM_TOKEN
 
 jobs:
   publish:
