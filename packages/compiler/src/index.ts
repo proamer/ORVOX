@@ -870,10 +870,10 @@ const parseRoutes = (
           throw new CompileError("ORVOX_ROUTE_OPTION", "A query schema must be t.object().");
         }
         for (const property of querySchema.properties) {
-          if (!["string", "integer", "boolean"].includes(property.schema.kind)) {
+          if (!["string", "integer", "number", "boolean", "literal", "enum"].includes(property.schema.kind)) {
             throw new CompileError(
               "ORVOX_ROUTE_OPTION",
-              `Query parameter "${property.name}" must be a string, integer, or boolean.`,
+              `Query parameter "${property.name}" must be a primitive, literal, or enum.`,
             );
           }
         }
@@ -908,10 +908,10 @@ const parseRoutes = (
               `Path param "${property.name}" cannot be optional.`,
             );
           }
-          if (!["string", "integer", "boolean"].includes(property.schema.kind)) {
+          if (!["string", "integer", "number", "boolean", "literal", "enum"].includes(property.schema.kind)) {
             throw new CompileError(
               "ORVOX_ROUTE_OPTION",
-              `Path param "${property.name}" must be a string, integer, or boolean.`,
+              `Path param "${property.name}" must be a primitive, literal, or enum.`,
             );
           }
         }

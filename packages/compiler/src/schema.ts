@@ -3,7 +3,11 @@ import ts from "typescript";
 export type SchemaIR =
   | { kind: "string"; min?: number; max?: number }
   | { kind: "integer"; min?: number; max?: number }
+  | { kind: "number"; min?: number; max?: number }
   | { kind: "boolean" }
+  | { kind: "literal"; value: string | number | boolean }
+  | { kind: "enum"; values: Array<string | number | boolean> }
+  | { kind: "union"; tag: string; branches: SchemaIR[] }
   | { kind: "optional"; inner: SchemaIR }
   | { kind: "array"; items: SchemaIR; min?: number; max?: number }
   | {
@@ -39,9 +43,20 @@ const numberLiteral = (input: ts.Expression | undefined) => {
   return undefined;
 };
 
+const literalValue = (input: ts.Expression | undefined) => {
+  if (!input) return undefined;
+  const node = unwrap(input);
+  if (ts.isStringLiteralLike(node)) return node.text;
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+  const value = numberLiteral(node);
+  return value !== undefined && Number.isFinite(value) ? value : undefined;
+};
+
 const parseBounds = (
   input: ts.Expression | undefined,
   fail: Fail,
+  fractional = false,
 ): { min?: number; max?: number } => {
   if (!input) return {};
   input = unwrap(input);
@@ -61,8 +76,11 @@ const parseBounds = (
       return fail("ORVOX_SCHEMA_OPTION", `Unsupported schema option "${name}".`);
     }
     const value = numberLiteral(property.initializer);
-    if (value === undefined || !Number.isInteger(value)) {
-      return fail("ORVOX_STATIC_SCHEMA_REQUIRED", `Schema option "${name}" must be an integer literal.`);
+    if (value === undefined || (fractional ? !Number.isFinite(value) : !Number.isInteger(value))) {
+      return fail(
+        "ORVOX_STATIC_SCHEMA_REQUIRED",
+        `Schema option "${name}" must be ${fractional ? "a numeric" : "an integer"} literal.`,
+      );
     }
     result[name] = value;
   }
@@ -157,6 +175,70 @@ export function parseSchemaExpression(
       inner: parseSchemaExpression(inner, namespaces, declarations, usedDeclarations, fail, resolving),
     };
   }
+  if (method === "number") {
+    return { kind: "number", ...parseBounds(input.arguments[0], fail, true) };
+  }
+  if (method === "literal") {
+    const value = literalValue(input.arguments[0]);
+    if (value === undefined) {
+      return fail("ORVOX_STATIC_SCHEMA_REQUIRED", "t.literal() requires a string, number, or boolean literal.");
+    }
+    return { kind: "literal", value };
+  }
+  if (method === "enum") {
+    const list = input.arguments[0] && unwrap(input.arguments[0]);
+    if (!list || !ts.isArrayLiteralExpression(list)) {
+      return fail("ORVOX_STATIC_SCHEMA_REQUIRED", "t.enum() requires an array literal.");
+    }
+    const values: Array<string | number | boolean> = [];
+    for (const element of list.elements) {
+      const value = literalValue(element);
+      if (value === undefined) {
+        return fail("ORVOX_STATIC_SCHEMA_REQUIRED", "t.enum() values must be string, number, or boolean literals.");
+      }
+      if (values.includes(value)) return fail("ORVOX_SCHEMA_OPTION", "t.enum() values must be distinct.");
+      values.push(value);
+    }
+    if (!values.length) return fail("ORVOX_SCHEMA_OPTION", "t.enum() requires at least one value.");
+    return { kind: "enum", values };
+  }
+  if (method === "union") {
+    const tag = input.arguments[0] && unwrap(input.arguments[0]);
+    if (!tag || !ts.isStringLiteralLike(tag)) {
+      return fail("ORVOX_STATIC_SCHEMA_REQUIRED", "t.union() requires a string literal tag.");
+    }
+    const list = input.arguments[1] && unwrap(input.arguments[1]);
+    if (!list || !ts.isArrayLiteralExpression(list)) {
+      return fail("ORVOX_STATIC_SCHEMA_REQUIRED", "t.union() requires an array literal of branches.");
+    }
+    const branches = list.elements.map(element =>
+      parseSchemaExpression(element, namespaces, declarations, usedDeclarations, fail, resolving));
+    if (branches.length < 2) {
+      return fail("ORVOX_SCHEMA_OPTION", "t.union() requires at least two branches.");
+    }
+    // The tag has to select exactly one branch, or the switch cannot be written.
+    const seen = new Set<string>();
+    branches.forEach((branch, index) => {
+      if (branch.kind !== "object") {
+        fail("ORVOX_SCHEMA_OPTION", `Union branch ${index + 1} must be a t.object().`);
+        return;
+      }
+      const property = branch.properties.find(item => item.name === tag.text);
+      if (!property || !property.required || property.schema.kind !== "literal") {
+        fail(
+          "ORVOX_SCHEMA_OPTION",
+          `Union branch ${index + 1} must set ${JSON.stringify(tag.text)} to a literal so the tag can select it.`,
+        );
+        return;
+      }
+      const key = JSON.stringify(property.schema.value);
+      if (seen.has(key)) {
+        fail("ORVOX_SCHEMA_OPTION", `Union branches ${JSON.stringify(tag.text)} values must be distinct.`);
+      }
+      seen.add(key);
+    });
+    return { kind: "union", tag: tag.text, branches };
+  }
   if (method === "array") {
     const items = input.arguments[0];
     if (!items) return fail("ORVOX_SCHEMA_ARGUMENT", "t.array() requires an item schema.");
@@ -229,8 +311,53 @@ export function emitValidation(schema: SchemaIR, value: string, headers = "") {
       if (current.max !== undefined) lines.push(`if ((${currentValue} as number) > ${current.max}) ${invalid(path, "max_value", `Expected a value less than or equal to ${current.max}.`)}`);
       return lines;
     }
+    if (current.kind === "number") {
+      const lines = [
+        `if (typeof ${currentValue} !== "number" || !Number.isFinite(${currentValue})) ${invalid(path, "invalid_type", "Expected a number.")}`,
+      ];
+      if (current.min !== undefined) lines.push(`if ((${currentValue} as number) < ${current.min}) ${invalid(path, "min_value", `Expected a value greater than or equal to ${current.min}.`)}`);
+      if (current.max !== undefined) lines.push(`if ((${currentValue} as number) > ${current.max}) ${invalid(path, "max_value", `Expected a value less than or equal to ${current.max}.`)}`);
+      return lines;
+    }
     if (current.kind === "boolean") {
       return [`if (typeof ${currentValue} !== "boolean") ${invalid(path, "invalid_type", "Expected a boolean.")}`];
+    }
+    if (current.kind === "literal") {
+      return [
+        `if (${currentValue} !== ${JSON.stringify(current.value)}) ${invalid(path, "invalid_value", `Expected ${JSON.stringify(current.value)}.`)}`,
+      ];
+    }
+    if (current.kind === "enum") {
+      const allowed = current.values.map(value => JSON.stringify(value));
+      return [
+        `if (!${JSON.stringify(current.values)}.includes(${currentValue} as never)) ${invalid(path, "invalid_value", `Expected one of ${allowed.join(", ")}.`)}`,
+      ];
+    }
+    if (current.kind === "union") {
+      // Switching on the tag is what lets a failure be reported against the one
+      // branch the tag chose, instead of a pile of "none of these matched".
+      const tagPath = `${path} + ${JSON.stringify(propertyPath(current.tag))}`;
+      const tagValue = `(${currentValue} as Record<string, unknown>)[${JSON.stringify(current.tag)}]`;
+      const tags = current.branches.map(branch => {
+        const property = branch.kind === "object"
+          ? branch.properties.find(item => item.name === current.tag)
+          : undefined;
+        return property && property.schema.kind === "literal" ? property.schema.value : undefined;
+      });
+      const lines = [
+        `if (${currentValue} === null || typeof ${currentValue} !== "object" || Array.isArray(${currentValue})) ${invalid(path, "invalid_type", "Expected an object.")}`,
+        `switch (${tagValue}) {`,
+      ];
+      current.branches.forEach((branch, index) => {
+        lines.push(`  case ${JSON.stringify(tags[index])}: {`);
+        lines.push(...emit(branch, currentValue, path).map(line => `    ${line}`));
+        lines.push("    break;");
+        lines.push("  }");
+      });
+      const allowed = tags.map(value => JSON.stringify(value));
+      lines.push(`  default: ${invalid(tagPath, "invalid_value", `Expected one of ${allowed.join(", ")}.`)}`);
+      lines.push("}");
+      return lines;
     }
     if (current.kind === "optional") {
       const lines = emit(current.inner, currentValue, path);
@@ -281,6 +408,21 @@ export function emitValidation(schema: SchemaIR, value: string, headers = "") {
 }
 
 export function schemaToOpenAPI(schema: SchemaIR): Record<string, unknown> {
+  if (schema.kind === "number") {
+    return {
+      type: "number",
+      ...(schema.min === undefined ? {} : { minimum: schema.min }),
+      ...(schema.max === undefined ? {} : { maximum: schema.max }),
+    };
+  }
+  if (schema.kind === "literal") return { const: schema.value };
+  if (schema.kind === "enum") return { enum: [...schema.values] };
+  if (schema.kind === "union") {
+    return {
+      oneOf: schema.branches.map(schemaToOpenAPI),
+      discriminator: { propertyName: schema.tag },
+    };
+  }
   if (schema.kind === "string") {
     return {
       type: "string",
@@ -346,8 +488,8 @@ export function emitStringMapValidation(
     // parseSchemaExpression already unwraps t.optional() into required:false,
     // so property.schema is the primitive itself.
     const inner = property.schema;
-    if (inner.kind !== "string" && inner.kind !== "integer" && inner.kind !== "boolean") {
-      throw new Error(`A ${label} must be a string, integer, or boolean.`);
+    if (!["string", "integer", "number", "boolean", "literal", "enum"].includes(inner.kind)) {
+      throw new Error(`A ${label} must be a primitive, literal, or enum.`);
     }
     const raw = `__orvoxRaw_${property.name.replace(/[^\w$]/g, "_")}`;
     const body: string[] = [];
@@ -367,6 +509,28 @@ export function emitStringMapValidation(
       if (inner.min !== undefined) body.push(`if (${number} < ${inner.min}) ${invalid(property.name, "min_value", `Expected a value greater than or equal to ${inner.min}.`)}`);
       if (inner.max !== undefined) body.push(`if (${number} > ${inner.max}) ${invalid(property.name, "max_value", `Expected a value less than or equal to ${inner.max}.`)}`);
       body.push(`${target}[${JSON.stringify(property.name)}] = ${number};`);
+    } else if (inner.kind === "number") {
+      const number = `${raw}_n`;
+      body.push(`const ${number} = Number(${raw});`);
+      body.push(`if (${raw}.trim() === "" || !Number.isFinite(${number})) ${invalid(property.name, "invalid_type", "Expected a number.")}`);
+      if (inner.min !== undefined) body.push(`if (${number} < ${inner.min}) ${invalid(property.name, "min_value", `Expected a value greater than or equal to ${inner.min}.`)}`);
+      if (inner.max !== undefined) body.push(`if (${number} > ${inner.max}) ${invalid(property.name, "max_value", `Expected a value less than or equal to ${inner.max}.`)}`);
+      body.push(`${target}[${JSON.stringify(property.name)}] = ${number};`);
+    } else if (inner.kind === "literal" || inner.kind === "enum") {
+      // The wire only carries strings, so each allowed value is matched by the
+      // text that would produce it and handed back as the declared type.
+      const values = inner.kind === "literal" ? [inner.value] : inner.values;
+      const arms = values.map(value => `${raw} === ${JSON.stringify(String(value))}`);
+      const named = values.map(value => JSON.stringify(value));
+      body.push(`if (!(${arms.join(" || ")})) ${invalid(
+        property.name,
+        "invalid_value",
+        values.length === 1 ? `Expected ${named[0]}.` : `Expected one of ${named.join(", ")}.`,
+      )}`);
+      const mapped = values
+        .map(value => `${raw} === ${JSON.stringify(String(value))} ? ${JSON.stringify(value)}`)
+        .join(" : ");
+      body.push(`${target}[${JSON.stringify(property.name)}] = ${mapped} : ${raw};`);
     } else {
       body.push(`if (${raw} !== "true" && ${raw} !== "false") ${invalid(property.name, "invalid_type", "Expected true or false.")}`);
       body.push(`${target}[${JSON.stringify(property.name)}] = ${raw} === "true";`);

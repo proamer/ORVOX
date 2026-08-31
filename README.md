@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.3.0</code> · MIT · requires Bun 1.4+
+  <code>0.4.0</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -230,12 +230,13 @@ how to reproduce it: [benchmarks/README.md](benchmarks/README.md).
 - **`header()` covers the whole route.** Static headers reach handler results, guard short-circuits, and validation `400`s alike. Globally registered ones also reach the fallback `404` / `405` / `OPTIONS` and the error handler.
 - **Groups nest, and middleware accumulates outward-in.** A nested group runs everything its ancestors declared, then its own. `group.use()` still fails the build — middleware belongs in the group options, where it is visible.
 - **Everything must be statically readable.** Route paths, schemas, middleware, and hooks are top-level literal declarations with inline handlers. The compiler refuses what it cannot see rather than guessing.
-- **Schema bounds are integers**, in both the compiler and the runtime descriptors.
+- **Schema bounds are integers** for `t.int()` and item counts; `t.number()` takes fractional ones.
+- **Unions name their tag.** `t.union("type", [...])` compiles to a `switch`, so a failure is reported against the branch the tag selected rather than as "nothing matched". Every branch must be a `t.object()` setting that tag to a distinct literal; anything else fails the build naming the branch.
 
 ## Feature status
 
 - [x] Compile-time router — `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `raw`, and typed path params
-- [x] Compiled validation — objects, arrays, optionals, string/integer bounds, closed bodies
+- [x] Compiled validation — objects, arrays, optionals, numbers, literals, enums, tagged unions, closed bodies
 - [x] Flattened middleware — `header()`, `guard()`, `derive()`, and `group()` prefixes
 - [x] Production runtime — `onRequest` / `onError` / `onStop`, body-size limits, graceful shutdown
 - [x] WebSockets — compile-time route-id dispatch onto Bun's native handler

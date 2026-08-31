@@ -100,3 +100,17 @@ test("a body schema still refuses a string where an integer is declared", () => 
   // no Number() anywhere near the body path -- coercion is query-only
   expect(result.code).not.toContain("Number(__orvoxBody");
 });
+
+test("a query enum converts the text back to its declared value", () => {
+  const result = compileSource(`
+    import { orvox, t } from "@orvox/core"
+    const app = orvox()
+    app.get("/f", {
+      query: t.object({ sort: t.enum(["asc", "desc"]), lat: t.optional(t.number()) }),
+      handler: ({ query }) => query,
+    })
+    export default app
+  `, { entryPath: "src/app.ts" });
+  expect(result.code).toContain('"asc"');
+  expect(result.code).toContain("Number.isFinite");
+});
