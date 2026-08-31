@@ -1291,13 +1291,82 @@ const rewriteRelativeModule = (
   return statement;
 };
 
+/**
+ * Identifiers that actually name a binding. An identifier in a name position --
+ * `{ caller: 1 }`, `row.caller`, `{ caller: local }` -- is not one, and counting
+ * it retains any declaration that happens to share the name. That kept every
+ * `const caller = derive(() => ({ caller }))`, which is how derive is naturally
+ * written, and dragged @orvox/core into the deployed file with it.
+ */
+const bindingNames = (name: ts.BindingName, into: Set<string>) => {
+  if (ts.isIdentifier(name)) {
+    into.add(name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (ts.isBindingElement(element)) bindingNames(element.name, into);
+  }
+};
+
+/**
+ * Free identifiers -- the ones that could name a top-level declaration.
+ *
+ * Two things it has to see past. A name position (`{ caller: 1 }`, `row.caller`)
+ * is not a reference, and neither is a shadowed one: the emitted handler for a
+ * derive is `({ caller }) => caller`, whose `caller` is its own parameter. Counting
+ * either kept every `const caller = derive(() => ({ caller }))` -- the natural way
+ * to write one -- and dragged @orvox/core into the deployed file with it.
+ *
+ * Parent links are unavailable (the source is parsed without them and the emitted
+ * nodes are synthetic), so scope is tracked on the way down instead.
+ */
 const referencedNames = (nodes: readonly ts.Node[]) => {
   const names = new Set<string>();
-  const visit = (node: ts.Node) => {
-    if (ts.isIdentifier(node)) names.add(node.text);
-    ts.forEachChild(node, visit);
+  const visit = (node: ts.Node, bound: ReadonlySet<string>) => {
+    if (ts.isIdentifier(node)) {
+      if (!bound.has(node.text)) names.add(node.text);
+      return;
+    }
+    if (ts.isPropertyAccessExpression(node)) {
+      visit(node.expression, bound);
+      return;
+    }
+    if (ts.isPropertyAssignment(node)) {
+      if (ts.isComputedPropertyName(node.name)) visit(node.name, bound);
+      visit(node.initializer, bound);
+      return;
+    }
+    if (ts.isPropertySignature(node) || ts.isMethodSignature(node)) {
+      if (node.type) visit(node.type, bound);
+      return;
+    }
+    if (ts.isFunctionLike(node)) {
+      const inner = new Set(bound);
+      for (const parameter of node.parameters) bindingNames(parameter.name, inner);
+      if ("body" in node && node.body) {
+        for (const statement of ts.isBlock(node.body) ? node.body.statements : []) {
+          if (!ts.isVariableStatement(statement)) continue;
+          for (const declaration of statement.declarationList.declarations) {
+            bindingNames(declaration.name, inner);
+          }
+        }
+      }
+      for (const parameter of node.parameters) {
+        if (parameter.initializer) visit(parameter.initializer, bound);
+      }
+      if ("body" in node && node.body) visit(node.body, inner);
+      return;
+    }
+    if (ts.isBindingElement(node)) {
+      if (node.propertyName && ts.isComputedPropertyName(node.propertyName)) {
+        visit(node.propertyName, bound);
+      }
+      if (node.initializer) visit(node.initializer, bound);
+      return;
+    }
+    ts.forEachChild(node, child => visit(child, bound));
   };
-  for (const node of nodes) visit(node);
+  for (const node of nodes) visit(node, new Set());
   return names;
 };
 

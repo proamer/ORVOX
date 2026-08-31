@@ -184,6 +184,40 @@ describe("compileSource", () => {
     );
   });
 
+  test("erases a derive whose const shares a name with the key it returns", () => {
+    // The natural way to write one, and it used to survive compilation and drag
+    // an @orvox/core import into the deployed file: the emitted handler is
+    // ({ caller }) => caller, whose caller is its own parameter, and the
+    // reference scan was scope-blind.
+    const result = compileSource(`
+      import { derive, orvox } from "@orvox/core"
+      const app = orvox()
+      const caller = derive(({ headers }) => ({ caller: headers["x-caller"] ?? "anon" }))
+      app.get("/me", { use: [caller], handler: ({ caller }) => caller })
+      export default app
+    `, { entryPath: "src/app.ts" });
+
+    expect(result.code).not.toContain("const caller = derive(");
+    expect(result.code).not.toContain("@orvox/core");
+  });
+
+  test("keeps a declaration a surviving statement still names", () => {
+    const result = compileSource(`
+      import { orvox, t } from "@orvox/core"
+      const app = orvox()
+      const Limit = t.int({ min: 1 })
+      const Body = t.object({ n: Limit })
+      const ceiling = 10
+      app.post("/n", { body: Body, handler: ({ body }) => body.n + ceiling })
+      export default app
+    `, { entryPath: "src/app.ts" });
+
+    // ceiling is referenced by the handler and has to survive; the schemas are
+    // compiled into checks and must not
+    expect(result.code).toContain("const ceiling = 10");
+    expect(result.code).not.toContain("t.object(");
+  });
+
   test("warns when global middleware is declared after a route", () => {
     const source = `
       import { orvox, header } from "@orvox/core"

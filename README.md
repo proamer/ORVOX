@@ -166,7 +166,9 @@ export const server = Bun.serve({
 });
 ```
 
-A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/crud/src/app.ts).
+A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/crud/src/app.ts), and
+[examples/links/src/app.ts](examples/links/src/app.ts) is a link shortener on `bun:sqlite` — prepared
+statements, a tagged union body, cursor paging, nested groups, and a raw redirect route.
 
 ## Build output
 
@@ -190,7 +192,7 @@ An architectural comparison; measured throughput follows.
 | **Route matching** | Native Bun route table, built at compile time | Runtime dynamic tree | Runtime trie | Native route table, hand-written |
 | **Validation** | Inlined `if` statements | Runtime JIT (TypeBox) | Runtime parsing (Zod) | Hand-written |
 | **Middleware** | Flattened into the handler | Runtime chain | Runtime chain | None |
-| **Deployed dependencies** | None — the output imports nothing | Framework + validator | Framework + validator | None |
+| **Deployed dependencies** | None, unless a schema survives for a `type X = Infer<typeof X>` | Framework + validator | Framework + validator | None |
 | **Inspectability** | The whole server is one readable file | Framework internals | Framework internals | Full |
 | **OpenAPI** | Build artifact | Runtime schema walk | Manual | Manual |
 
