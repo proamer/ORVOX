@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import {
+  emitStringMapValidation,
   emitValidation,
   parseSchemaExpression,
   schemaToOpenAPI,
@@ -40,6 +41,7 @@ export type RouteManifestEntry = {
   middleware: MiddlewareManifestEntry[];
   responseMode: ResponseMode;
   schema?: SchemaIR;
+  querySchema?: SchemaIR;
 };
 
 export type RoutesManifest = {
@@ -715,6 +717,7 @@ const parseRoutes = (
     const routeInput = call.arguments[raw ? 2 : 1];
     let handler: ts.Expression | undefined = routeInput;
     let schema: SchemaIR | undefined;
+    let querySchema: SchemaIR | undefined;
     let routeMiddleware: CompiledMiddleware[] = [];
     if (!raw && routeInput && ts.isObjectLiteralExpression(unwrap(routeInput))) {
       const options = unwrap(routeInput) as ts.ObjectLiteralExpression;
@@ -729,7 +732,7 @@ const parseRoutes = (
             "Route options must use static property assignments.",
           );
         }
-        if (!["handler", "body", "use"].includes(property.name.text)) {
+        if (!["handler", "body", "query", "use"].includes(property.name.text)) {
           throw new CompileError(
             "ORVOX_ROUTE_OPTION",
             `Unsupported route option "${property.name.text}".`,
@@ -749,6 +752,30 @@ const parseRoutes = (
             throw new CompileError(code, message);
           },
         );
+      }
+      const queryOption = properties.get("query");
+      if (queryOption) {
+        querySchema = parseSchemaExpression(
+          queryOption,
+          namespaces,
+          declarations,
+          usedSchemas,
+          (code, message) => {
+            throw new CompileError(code, message);
+          },
+        );
+        if (querySchema.kind !== "object") {
+          throw new CompileError("ORVOX_ROUTE_OPTION", "A query schema must be t.object().");
+        }
+        for (const property of querySchema.properties) {
+          const inner = property.schema.kind === "optional" ? property.schema.inner : property.schema;
+          if (!["string", "integer", "boolean"].includes(inner.kind)) {
+            throw new CompileError(
+              "ORVOX_ROUTE_OPTION",
+              `Query parameter "${property.name}" must be a string, integer, or boolean.`,
+            );
+          }
+        }
       }
       routeMiddleware = parseMiddlewareInput(
         properties.get("use"),
@@ -810,6 +837,7 @@ const parseRoutes = (
     }
     mergeNeeds(needs, contextNeeds(handler, raw, key, warnings, extensions));
     if (schema) needs.body = true;
+    if (querySchema) needs.query = true;
     routes.push({
       method: method as HttpMethod,
       path,
@@ -821,6 +849,7 @@ const parseRoutes = (
       raw,
       middlewareNodes,
       ...(schema ? { schema } : {}),
+      ...(querySchema ? { querySchema } : {}),
     });
   };
 
@@ -1403,9 +1432,19 @@ const requestPrelude = (route: CompiledRoute, req: string, headers = "") => {
     if (route.schema) lines.push(...emitValidation(route.schema, "__orvoxBody", headers));
   }
   if (route.needs.query) {
-    lines.push(
-      `const __orvoxQuery = Object.fromEntries(new URL(${req}.url).searchParams) as Record<string, string>;`,
-    );
+    if (route.querySchema) {
+      lines.push(`const __orvoxSearch = new URL(${req}.url).searchParams;`);
+      lines.push(...emitStringMapValidation(
+        route.querySchema,
+        "__orvoxQuery",
+        name => `__orvoxSearch.get(${JSON.stringify(name)})`,
+        headers,
+      ));
+    } else {
+      lines.push(
+        `const __orvoxQuery = Object.fromEntries(new URL(${req}.url).searchParams) as Record<string, string>;`,
+      );
+    }
   }
   if (route.needs.headers) {
     if (route.needs.headers.includes("*")) {
@@ -1575,7 +1614,7 @@ const generateRouteMethod = (
       ].join("\n"),
       needsHelper: true,
       needsInvalidJson: route.needs.body && !route.schema,
-      needsValidation: !!route.schema,
+      needsValidation: !!route.schema || !!route.querySchema,
     };
   }
 
@@ -1614,7 +1653,7 @@ const generateRouteMethod = (
     ].join("\n"),
     needsHelper: unknown,
     needsInvalidJson: route.needs.body && !route.schema,
-    needsValidation: !!route.schema,
+    needsValidation: !!route.schema || !!route.querySchema,
   };
 };
 

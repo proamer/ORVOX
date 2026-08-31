@@ -19,14 +19,26 @@ export type RouteParams<Path extends string> = string extends Path
   ? Record<string, string>
   : { readonly [Name in ParamNames<Path>]: string };
 
+/** What `query` is when a route declares no query schema. */
+export type RawQuery = Readonly<Record<string, string | undefined>>;
+
+/**
+ * Query values arrive as strings, so a declared schema both narrows and
+ * converts them. Without one the raw string map is what the handler gets.
+ */
+export type QueryContext<QuerySchema> = QuerySchema extends AnySchema
+  ? Infer<QuerySchema>
+  : RawQuery;
+
 export type RouteContext<
   Path extends string,
   Body = unknown,
   Extension extends object = Record<never, never>,
+  Query = RawQuery,
 > = {
   readonly params: RouteParams<Path>;
   readonly body: Body;
-  readonly query: Readonly<Record<string, string | undefined>>;
+  readonly query: Query;
   readonly headers: Readonly<Record<string, string | null>>;
   readonly cookies: CookieMap;
   readonly request: BunRequest<Path>;
@@ -38,8 +50,9 @@ export type RouteHandler<
   Result = unknown,
   Body = unknown,
   Extension extends object = Record<never, never>,
+  Query = RawQuery,
 > = (
-  context: RouteContext<Path, Body, Extension>,
+  context: RouteContext<Path, Body, Extension, Query>,
 ) => Result | Promise<Result>;
 
 export type RawHandler<Path extends string> = (
@@ -74,9 +87,22 @@ export type BodyRouteOptions<
   BodySchema extends AnySchema,
   Result,
   Extension extends object = Record<never, never>,
+  QuerySchema = unknown,
 > = Readonly<{
   body: BodySchema;
-  handler: RouteHandler<Path, Result, Infer<BodySchema>, Extension>;
+  query?: QuerySchema;
+  handler: RouteHandler<Path, Result, Infer<BodySchema>, Extension, QueryContext<QuerySchema>>;
+}>;
+
+/** `{ query, handler }` with no body and no middleware. */
+export type QueryRouteOptions<
+  Path extends string,
+  QuerySchema extends AnySchema,
+  Result,
+  Extension extends object = Record<never, never>,
+> = Readonly<{
+  query: QuerySchema;
+  handler: RouteHandler<Path, Result, unknown, Extension, Infer<QuerySchema>>;
 }>;
 
 export type MiddlewareContext = RouteContext<string> & Record<string, any>;
@@ -119,9 +145,17 @@ type MiddlewareRouteOptions<
   Body,
   Extension extends object,
   Use extends MiddlewareInput,
+  QuerySchema = unknown,
 > = Readonly<{
   use: Use;
-  handler: RouteHandler<Path, Result, Body, Extension & MiddlewareExtension<Use>>;
+  query?: QuerySchema;
+  handler: RouteHandler<
+    Path,
+    Result,
+    Body,
+    Extension & MiddlewareExtension<Use>,
+    QueryContext<QuerySchema>
+  >;
 }>;
 
 type MiddlewareBodyRouteOptions<
@@ -145,6 +179,10 @@ export interface OrvoxApp<
     path: Path,
     options: MiddlewareRouteOptions<JoinPath<Prefix, Path>, Result, unknown, Extension, Use>,
   ): this;
+  get<const Path extends string, QuerySchema extends AnySchema, Result>(
+    path: Path,
+    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+  ): this;
   post<const Path extends string, Result>(
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
@@ -166,6 +204,10 @@ export interface OrvoxApp<
     path: Path,
     options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
   ): this;
+  post<const Path extends string, QuerySchema extends AnySchema, Result>(
+    path: Path,
+    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+  ): this;
   put<const Path extends string, Result>(
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
@@ -181,6 +223,10 @@ export interface OrvoxApp<
   put<const Path extends string, BodySchema extends AnySchema, const Use extends MiddlewareInput, Result>(
     path: Path,
     options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
+  ): this;
+  put<const Path extends string, QuerySchema extends AnySchema, Result>(
+    path: Path,
+    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
   ): this;
   patch<const Path extends string, Result>(
     path: Path,
@@ -198,6 +244,10 @@ export interface OrvoxApp<
     path: Path,
     options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
   ): this;
+  patch<const Path extends string, QuerySchema extends AnySchema, Result>(
+    path: Path,
+    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+  ): this;
   delete<const Path extends string, Result>(
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
@@ -213,6 +263,10 @@ export interface OrvoxApp<
   delete<const Path extends string, BodySchema extends AnySchema, const Use extends MiddlewareInput, Result>(
     path: Path,
     options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
+  ): this;
+  delete<const Path extends string, QuerySchema extends AnySchema, Result>(
+    path: Path,
+    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
   ): this;
   raw<const Path extends string>(
     method: HttpMethod,

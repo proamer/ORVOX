@@ -316,3 +316,70 @@ export function schemaToOpenAPI(schema: SchemaIR): Record<string, unknown> {
       : { required: schema.properties.filter(property => property.required).map(property => property.name) }),
   };
 }
+
+/**
+ * Query and path values arrive as strings, so a declared `t.int()` there can
+ * only mean "parse this". Bodies are JSON and keep their own types, so
+ * `emitValidation` above never coerces. Position decides, not a separate
+ * builder.
+ *
+ * Unlike bodies, a string map is left open: undeclared parameters are ignored
+ * rather than rejected. Nothing undeclared reaches the handler either way, and
+ * rejecting them would break on every `utm_source` in the wild.
+ */
+export function emitStringMapValidation(
+  schema: SchemaIR,
+  target: string,
+  read: (name: string) => string,
+  headers = "",
+  label = "query parameter",
+) {
+  if (schema.kind !== "object") {
+    throw new Error("String map schemas must be objects.");
+  }
+  const suffix = headers ? `, ${headers}` : "";
+  const invalid = (name: string, code: string, message: string) =>
+    `return __orvoxValidationError(${JSON.stringify(`$.${name}`)}, ${JSON.stringify(code)}, ${JSON.stringify(message)}${suffix});`;
+
+  const lines = [`const ${target}: Record<string, unknown> = {};`];
+  for (const property of schema.properties) {
+    const inner = property.schema.kind === "optional" ? property.schema.inner : property.schema;
+    if (inner.kind !== "string" && inner.kind !== "integer" && inner.kind !== "boolean") {
+      throw new Error(`A ${label} must be a string, integer, or boolean.`);
+    }
+    const raw = `__orvoxRaw_${property.name.replace(/[^\w$]/g, "_")}`;
+    const body: string[] = [];
+
+    if (inner.kind === "string") {
+      if (inner.min !== undefined) {
+        body.push(`if (${raw}.length < ${inner.min}) ${invalid(property.name, "min_length", `Expected at least ${inner.min} character${inner.min === 1 ? "" : "s"}.`)}`);
+      }
+      if (inner.max !== undefined) {
+        body.push(`if (${raw}.length > ${inner.max}) ${invalid(property.name, "max_length", `Expected at most ${inner.max} character${inner.max === 1 ? "" : "s"}.`)}`);
+      }
+      body.push(`${target}[${JSON.stringify(property.name)}] = ${raw};`);
+    } else if (inner.kind === "integer") {
+      const number = `${raw}_n`;
+      body.push(`const ${number} = Number(${raw});`);
+      body.push(`if (${raw}.trim() === "" || !Number.isInteger(${number})) ${invalid(property.name, "invalid_type", "Expected an integer.")}`);
+      if (inner.min !== undefined) body.push(`if (${number} < ${inner.min}) ${invalid(property.name, "min_value", `Expected a value greater than or equal to ${inner.min}.`)}`);
+      if (inner.max !== undefined) body.push(`if (${number} > ${inner.max}) ${invalid(property.name, "max_value", `Expected a value less than or equal to ${inner.max}.`)}`);
+      body.push(`${target}[${JSON.stringify(property.name)}] = ${number};`);
+    } else {
+      body.push(`if (${raw} !== "true" && ${raw} !== "false") ${invalid(property.name, "invalid_type", "Expected true or false.")}`);
+      body.push(`${target}[${JSON.stringify(property.name)}] = ${raw} === "true";`);
+    }
+
+    lines.push(`{`);
+    lines.push(`  const ${raw} = ${read(property.name)};`);
+    lines.push(`  if (${raw} === null || ${raw} === undefined) {`);
+    lines.push(property.required
+      ? `    ${invalid(property.name, "required", `Required ${label} is missing.`)}`
+      : `    /* optional */`);
+    lines.push(`  } else {`);
+    lines.push(...body.map(line => `    ${line}`));
+    lines.push(`  }`);
+    lines.push(`}`);
+  }
+  return lines;
+}
