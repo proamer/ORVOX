@@ -8,7 +8,11 @@
 </p>
 
 <p align="center">
-  <code>0.1.0-alpha.1</code> · MIT · requires Bun 1.4+
+  <a href="https://proamer.github.io/ORVOX/"><strong>Read the handbook →</strong></a>
+</p>
+
+<p align="center">
+  <code>0.1.0</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -35,11 +39,11 @@ The output is a plain TypeScript file you can open, read, and step through in a 
 ## Quick start
 
 ```bash
-bun add @orvox/core@alpha
+bun add @orvox/core
 ```
 
 ```bash
-bun add -d @orvox/cli@alpha
+bun add -d @orvox/cli
 ```
 
 Write `src/app.ts`:
@@ -171,7 +175,7 @@ A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/c
 | File | What it is |
 | --- | --- |
 | `server.generated.ts` | The server. This is the only file you deploy and run. |
-| `openapi.json` | OpenAPI 3.1, generated from the same IR the validators come from. |
+| `openapi.json` | OpenAPI 3.1, generated from the same IR the validators come from. `info` describes your API, so set it with `orvox({ openapi: { title, version } })` — it defaults to `{ title: "ORVOX API", version: "0.0.0" }`. |
 | `routes.manifest.json` | Every route with its params, flattened middleware, response mode, and the exact request data it reads. |
 | `analysis.json` | Compiler warnings — dynamic context access, block-handler fallbacks, late global middleware. |
 
@@ -190,7 +194,7 @@ An architectural comparison, not a benchmark result. For numbers, run the lab yo
 | **Inspectability** | The whole server is one readable file | Framework internals | Framework internals | Full |
 | **OpenAPI** | Build artifact | Runtime schema walk | Manual | Manual |
 
-## Alpha semantics worth knowing
+## Semantics worth knowing
 
 - **Bodies are closed.** Object schemas reject undeclared properties with a `400` / `unknown_property` issue, so nothing can smuggle extra fields into a handler and `Infer<>` is exactly what arrives. OpenAPI mirrors this with `additionalProperties: false`.
 - **`app.use()` is positional.** Global middleware applies to the routes declared *after* it. Declaring it late is legal but raises `ORVOX_LATE_GLOBAL_MIDDLEWARE` in `analysis.json`.
@@ -239,7 +243,7 @@ pnpm bench:smoke
 
 Publishing is manual and gated. `pnpm pack:alpha` writes local tarballs to `artifacts/` for inspection; the [publish workflow](.github/workflows/publish.yml) is `workflow_dispatch`-only. It holds no npm secret — releases authenticate through npm trusted publishing (OIDC), so every published version carries SLSA provenance tying it back to the commit and workflow run that built it.
 
-Design decisions are recorded in [docs/decisions](docs/decisions); the compiler pipeline is sketched in [docs/architecture.md](docs/architecture.md).
+The task-by-task guide lives at [proamer.github.io/ORVOX](https://proamer.github.io/ORVOX/), built from [docs/index.html](docs/index.html). Design decisions are recorded in [docs/decisions](docs/decisions); the compiler pipeline is sketched in [docs/architecture.md](docs/architecture.md).
 
 ## License
 

@@ -49,6 +49,11 @@ export type RawHandler<Path extends string> = (
 
 export type OrvoxOptions = Readonly<{
   maxRequestBodySize?: number;
+  /**
+   * `info` for the generated OpenAPI document. It describes your API, not the
+   * compiler, so set it. Defaults to `{ title: "ORVOX API", version: "0.0.0" }`.
+   */
+  openapi?: Readonly<{ title?: string; version?: string }>;
 }>;
 
 export type WebSocketRoute = Readonly<{

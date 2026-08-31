@@ -110,6 +110,7 @@ type CompiledRoute = RouteManifestEntry & {
 
 type RuntimeHooks = {
   maxRequestBodySize: number;
+  openapi: { title: string; version: string };
   onRequest?: HandlerNode;
   onError?: HandlerNode;
   onStop?: HandlerNode;
@@ -960,7 +961,12 @@ const parseRoutes = (
 };
 
 const parseRuntime = (sourceFile: ts.SourceFile, appName: string) => {
-  const hooks: RuntimeHooks = { maxRequestBodySize: 1_048_576 };
+  // The spec describes the user's API, not this compiler, so the version has to
+  // come from them. "0.0.0" is the honest placeholder until it does.
+  const hooks: RuntimeHooks = {
+    maxRequestBodySize: 1_048_576,
+    openapi: { title: "ORVOX API", version: "0.0.0" },
+  };
   for (const statement of sourceFile.statements) {
     if (!ts.isVariableStatement(statement)) continue;
     for (const declaration of statement.declarationList.declarations) {
@@ -979,9 +985,37 @@ const parseRuntime = (sourceFile: ts.SourceFile, appName: string) => {
         if (
           !ts.isPropertyAssignment(property) ||
           (!ts.isIdentifier(property.name) && !ts.isStringLiteralLike(property.name)) ||
-          property.name.text !== "maxRequestBodySize"
+          !["maxRequestBodySize", "openapi"].includes(property.name.text)
         ) {
-          throw new CompileError("ORVOX_SERVER_OPTION", "Only maxRequestBodySize is supported in orvox() options.");
+          throw new CompileError(
+            "ORVOX_SERVER_OPTION",
+            "Only maxRequestBodySize and openapi are supported in orvox() options.",
+          );
+        }
+        if (property.name.text === "openapi") {
+          const document = unwrap(property.initializer);
+          if (!ts.isObjectLiteralExpression(document)) {
+            throw new CompileError("ORVOX_SERVER_OPTION", "openapi must be an object literal.");
+          }
+          for (const field of document.properties) {
+            // Read the name first so `{ version }` shorthand reports the value
+            // problem it actually has instead of looking like an unknown key.
+            const named = ts.isPropertyAssignment(field) || ts.isShorthandPropertyAssignment(field);
+            const name = named && (ts.isIdentifier(field.name) || ts.isStringLiteralLike(field.name))
+              ? field.name.text
+              : undefined;
+            if (!name || !["title", "version"].includes(name)) {
+              throw new CompileError("ORVOX_SERVER_OPTION", "openapi accepts only title and version.");
+            }
+            const message = `openapi.${name} must be a non-empty string literal.`;
+            if (!ts.isPropertyAssignment(field)) {
+              throw new CompileError("ORVOX_SERVER_OPTION", message);
+            }
+            const text = literalText(unwrap(field.initializer), "ORVOX_SERVER_OPTION", message);
+            if (!text) throw new CompileError("ORVOX_SERVER_OPTION", message);
+            hooks.openapi[name as "title" | "version"] = text;
+          }
+          continue;
         }
         const value = literalNumber(property.initializer);
         if (value === undefined || !Number.isSafeInteger(value) || value <= 0) {
@@ -1625,7 +1659,7 @@ const compareFallbackPaths = (left: string, right: string) => {
   return 0;
 };
 
-const generateOpenAPI = (routes: CompiledRoute[]): OpenAPIDocument => {
+const generateOpenAPI = (routes: CompiledRoute[], info: OpenAPIDocument["info"]): OpenAPIDocument => {
   const paths: OpenAPIDocument["paths"] = {};
   for (const route of routes) {
     const path = route.path.replace(/:([A-Za-z_$][\w$]*)/g, "{$1}");
@@ -1654,7 +1688,7 @@ const generateOpenAPI = (routes: CompiledRoute[]): OpenAPIDocument => {
   }
   return {
     openapi: "3.1.0",
-    info: { title: "ORVOX API", version: "0.1.0-alpha.1" },
+    info,
     paths,
   };
 };
@@ -1904,7 +1938,7 @@ export function compileSource(
     ({ handler: _handler, raw: _raw, middlewareNodes: _middlewareNodes, ...route }) => route,
   );
   const normalizedEntry = slash(relative(process.cwd(), entryPath));
-  const openapi = generateOpenAPI(routes);
+  const openapi = generateOpenAPI(routes, hooks.openapi);
   return {
     code: generateCode(routes, websockets, hooks, sourceFile, retained, globalHeaders),
     manifest: { version: 1, entry: normalizedEntry, routes: manifestRoutes },

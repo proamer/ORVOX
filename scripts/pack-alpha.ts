@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const destination = join(root, "artifacts");
-const version = "0.1.0-alpha.1";
+const { version } = await Bun.file(join(root, "package.json")).json();
 const packages = ["schema", "core", "compiler", "cli"];
 const pnpm = Bun.which("pnpm");
 

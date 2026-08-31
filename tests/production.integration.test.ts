@@ -120,7 +120,7 @@ test("emits deterministic OpenAPI and writes the artifact", async () => {
   const result = compileSource(apiSource, { entryPath: "src/app.ts" });
   expect(result.openapi).toEqual({
     openapi: "3.1.0",
-    info: { title: "ORVOX API", version: "0.1.0-alpha.1" },
+    info: { title: "ORVOX API", version: "0.0.0" },
     paths: {
       "/users/{id}": {
         post: {
@@ -149,6 +149,29 @@ test("emits deterministic OpenAPI and writes the artifact", async () => {
       },
     },
   });
+
+  const configured = compileSource(`
+    import { orvox } from "@orvox/core"
+    const app = orvox({ openapi: { title: "Billing", version: "2.4.0" } })
+    app.get("/invoices", () => [])
+    export default app
+  `, { entryPath: "src/app.ts" });
+  expect(configured.openapi.info).toEqual({ title: "Billing", version: "2.4.0" });
+
+  expect(() => compileSource(`
+    import { orvox } from "@orvox/core"
+    const version = "9"
+    const app = orvox({ openapi: { version } })
+    app.get("/", () => "ok")
+    export default app
+  `, { entryPath: "src/app.ts" })).toThrow("openapi.version must be a non-empty string literal.");
+
+  expect(() => compileSource(`
+    import { orvox } from "@orvox/core"
+    const app = orvox({ openapi: { descriptio: "typo" } })
+    app.get("/", () => "ok")
+    export default app
+  `, { entryPath: "src/app.ts" })).toThrow("openapi accepts only title and version.");
 
   const directory = await mkdtemp(join(tmpdir(), "orvox-m5-openapi-"));
   try {
