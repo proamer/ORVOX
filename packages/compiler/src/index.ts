@@ -683,6 +683,104 @@ const parseRoutes = (
   const usedSchemas = new Set<string>();
   const builders = middlewareBuilders(sourceFile);
   const usedMiddleware = new Set<string>();
+  const addGroup = (
+    call: ts.CallExpression,
+    parentPrefix: string,
+    parentMiddleware: CompiledMiddleware[],
+  ) => {
+    const localPrefix = literalText(
+      call.arguments[0],
+      "ORVOX_LITERAL_GROUP_PREFIX_REQUIRED",
+      "Group prefixes must be string literals.",
+    );
+    validatePath(localPrefix);
+    if (localPrefix.length > 1 && localPrefix.endsWith("/")) {
+      throw new CompileError("ORVOX_INVALID_GROUP_PREFIX", "Group prefixes cannot end with a slash.");
+    }
+    const prefix = joinRoutePath(parentPrefix, localPrefix);
+    const options = call.arguments[1] && unwrap(call.arguments[1]);
+    if (!options || !ts.isObjectLiteralExpression(options)) {
+      throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group options must be an object literal.");
+    }
+    let groupUse: ts.Expression | undefined;
+    for (const property of options.properties) {
+      if (
+        !ts.isPropertyAssignment(property) ||
+        (!ts.isIdentifier(property.name) && !ts.isStringLiteralLike(property.name)) ||
+        property.name.text !== "use"
+      ) {
+        throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group options only support a static use property.");
+      }
+      groupUse = property.initializer;
+    }
+    const configure = call.arguments[2];
+    if (!isHandler(configure) || !ts.isBlock(configure.body)) {
+      throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group callbacks must be inline function blocks.");
+    }
+    const groupParameter = configure.parameters[0]?.name;
+    if (!groupParameter || !ts.isIdentifier(groupParameter)) {
+      throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group callbacks require an identifier parameter.");
+    }
+    // Middleware accumulates outward-in: a nested group runs everything its
+    // ancestors declared, then its own.
+    const groupMiddleware = [
+      ...parentMiddleware,
+      ...parseMiddlewareInput(groupUse, builders, declarations, usedMiddleware),
+    ];
+    const directGroupCalls = new Set<ts.CallExpression>();
+    for (const groupStatement of configure.body.statements) {
+      if (!ts.isExpressionStatement(groupStatement)) continue;
+      const expression = unwrap(groupStatement.expression);
+      if (
+        ts.isCallExpression(expression) &&
+        ts.isPropertyAccessExpression(expression.expression) &&
+        ts.isIdentifier(expression.expression.expression) &&
+        expression.expression.expression.text === groupParameter.text &&
+        expression.expression.name.text === "group"
+      ) {
+        directGroupCalls.add(expression);
+        addGroup(expression, prefix, groupMiddleware);
+        continue;
+      }
+      const groupCall = appRouteCall(groupStatement.expression, groupParameter.text);
+      if (!groupCall) continue;
+      directGroupCalls.add(groupCall);
+      addRoute(groupCall, prefix, groupMiddleware);
+    }
+    const inspectGroup = (node: ts.Node) => {
+      const groupCall = appRouteCall(node, groupParameter.text);
+      if (groupCall && !directGroupCalls.has(groupCall)) {
+        throw new CompileError(
+          "ORVOX_STATIC_ROUTE_REQUIRED",
+          "Routes must be registered as top-level statements.",
+        );
+      }
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === groupParameter.text &&
+        !directGroupCalls.has(node)
+      ) {
+        const called = node.expression.name.text;
+        if (called === "use") {
+          throw new CompileError(
+            "ORVOX_STATIC_DSL_REQUIRED",
+            "group.use() is not supported; declare middleware in the group options.",
+          );
+        }
+        if (called === "group") {
+          throw new CompileError(
+            "ORVOX_STATIC_DSL_REQUIRED",
+            "Nested groups must be registered as top-level statements of their group.",
+          );
+        }
+      }
+      ts.forEachChild(node, inspectGroup);
+    };
+    inspectGroup(configure.body);
+  };
+
   const directAppCalls = new Set<ts.CallExpression>();
   const seen = new Set<string>();
   const patterns = new Map<string, string>();
@@ -924,73 +1022,7 @@ const parseRoutes = (
       continue;
     }
 
-    const prefix = literalText(
-      call.arguments[0],
-      "ORVOX_LITERAL_GROUP_PREFIX_REQUIRED",
-      "Group prefixes must be string literals.",
-    );
-    validatePath(prefix);
-    if (prefix.length > 1 && prefix.endsWith("/")) {
-      throw new CompileError("ORVOX_INVALID_GROUP_PREFIX", "Group prefixes cannot end with a slash.");
-    }
-    const options = call.arguments[1] && unwrap(call.arguments[1]);
-    if (!options || !ts.isObjectLiteralExpression(options)) {
-      throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group options must be an object literal.");
-    }
-    let groupUse: ts.Expression | undefined;
-    for (const property of options.properties) {
-      if (
-        !ts.isPropertyAssignment(property) ||
-        (!ts.isIdentifier(property.name) && !ts.isStringLiteralLike(property.name)) ||
-        property.name.text !== "use"
-      ) {
-        throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group options only support a static use property.");
-      }
-      groupUse = property.initializer;
-    }
-    const configure = call.arguments[2];
-    if (!isHandler(configure) || !ts.isBlock(configure.body)) {
-      throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group callbacks must be inline function blocks.");
-    }
-    const groupParameter = configure.parameters[0]?.name;
-    if (!groupParameter || !ts.isIdentifier(groupParameter)) {
-      throw new CompileError("ORVOX_STATIC_GROUP_REQUIRED", "Group callbacks require an identifier parameter.");
-    }
-    const groupMiddleware = [
-      ...globalMiddleware,
-      ...parseMiddlewareInput(groupUse, builders, declarations, usedMiddleware),
-    ];
-    const directGroupCalls = new Set<ts.CallExpression>();
-    for (const groupStatement of configure.body.statements) {
-      if (!ts.isExpressionStatement(groupStatement)) continue;
-      const groupCall = appRouteCall(groupStatement.expression, groupParameter.text);
-      if (!groupCall) continue;
-      directGroupCalls.add(groupCall);
-      addRoute(groupCall, prefix, groupMiddleware);
-    }
-    const inspectGroup = (node: ts.Node) => {
-      const groupCall = appRouteCall(node, groupParameter.text);
-      if (groupCall && !directGroupCalls.has(groupCall)) {
-        throw new CompileError(
-          "ORVOX_STATIC_ROUTE_REQUIRED",
-          "Routes must be registered as top-level statements.",
-        );
-      }
-      if (
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression) &&
-        node.expression.expression.text === groupParameter.text &&
-        ["use", "group"].includes(node.expression.name.text)
-      ) {
-        throw new CompileError(
-          "ORVOX_STATIC_DSL_REQUIRED",
-          "Nested groups and group-level use() are not supported in v0.1; declare middleware in the group options.",
-        );
-      }
-      ts.forEachChild(node, inspectGroup);
-    };
-    inspectGroup(configure.body);
+    addGroup(call, "", globalMiddleware);
   }
 
   const inspectNested = (node: ts.Node) => {

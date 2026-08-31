@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.1.2</code> · MIT · requires Bun 1.4+
+  <code>0.2.0</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -224,9 +224,10 @@ how to reproduce it: [benchmarks/README.md](benchmarks/README.md).
 ## Semantics worth knowing
 
 - **Bodies are closed.** Object schemas reject undeclared properties with a `400` / `unknown_property` issue, so nothing can smuggle extra fields into a handler and `Infer<>` is exactly what arrives. OpenAPI mirrors this with `additionalProperties: false`.
+- **`query` and `params` convert as well as validate.** Those values arrive as strings, so a `t.int()` declared there parses rather than rejects, and the handler receives a number. A `t.int()` in a body still refuses a string — position decides, and there is no second set of builders. Query maps stay open, unlike bodies: undeclared parameters are ignored rather than rejected.
 - **`app.use()` is positional.** Global middleware applies to the routes declared *after* it. Declaring it late is legal but raises `ORVOX_LATE_GLOBAL_MIDDLEWARE` in `analysis.json`.
 - **`header()` covers the whole route.** Static headers reach handler results, guard short-circuits, and validation `400`s alike. Globally registered ones also reach the fallback `404` / `405` / `OPTIONS` and the error handler.
-- **Groups do not nest.** `group.group()` and `group.use()` fail the build with `ORVOX_STATIC_DSL_REQUIRED` instead of silently dropping routes.
+- **Groups nest, and middleware accumulates outward-in.** A nested group runs everything its ancestors declared, then its own. `group.use()` still fails the build — middleware belongs in the group options, where it is visible.
 - **Everything must be statically readable.** Route paths, schemas, middleware, and hooks are top-level literal declarations with inline handlers. The compiler refuses what it cannot see rather than guessing.
 - **Schema bounds are integers**, in both the compiler and the runtime descriptors.
 

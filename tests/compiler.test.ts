@@ -141,8 +141,8 @@ describe("compileSource", () => {
     ]);
   });
 
-  test("rejects nested groups and group-level use instead of dropping routes", () => {
-    const nested = `
+  test("nests groups, accumulating prefix and middleware down each level", () => {
+    const result = compileSource(`
       import { orvox, header } from "@orvox/core"
       const app = orvox()
       app.group("/v1", { use: header("x-g", "1") }, group => {
@@ -152,8 +152,22 @@ describe("compileSource", () => {
         })
       })
       export default app
-    `;
-    const groupUse = `
+    `, { entryPath: "src/app.ts" });
+
+    expect(result.manifest.routes.map(route => route.path)).toEqual(["/v1/ping", "/v1/deep/leaf"]);
+    // the outer header reaches the inner route, and the inner one does not
+    // escape upwards
+    expect(result.manifest.routes.map(route => route.middleware)).toEqual([
+      [{ kind: "header", name: "x-g", value: "1" }],
+      [
+        { kind: "header", name: "x-g", value: "1" },
+        { kind: "header", name: "x-d", value: "1" },
+      ],
+    ]);
+  });
+
+  test("still rejects group.use(), which would hide middleware from the group options", () => {
+    const source = `
       import { orvox, header } from "@orvox/core"
       const app = orvox()
       app.group("/v1", { use: header("x-g", "1") }, group => {
@@ -162,15 +176,12 @@ describe("compileSource", () => {
       })
       export default app
     `;
-
-    for (const source of [nested, groupUse]) {
-      expect(() => compileSource(source, { entryPath: "src/app.ts" })).toThrow(
-        new CompileError(
-          "ORVOX_STATIC_DSL_REQUIRED",
-          "Nested groups and group-level use() are not supported in v0.1; declare middleware in the group options.",
-        ),
-      );
-    }
+    expect(() => compileSource(source, { entryPath: "src/app.ts" })).toThrow(
+      new CompileError(
+        "ORVOX_STATIC_DSL_REQUIRED",
+        "group.use() is not supported; declare middleware in the group options.",
+      ),
+    );
   });
 
   test("warns when global middleware is declared after a route", () => {
