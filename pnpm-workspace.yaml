@@ -1,5 +1,3 @@
 packages:
   - packages/*
   - fixtures/*
-allowBuilds:
-  bun: true

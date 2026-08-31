@@ -225,6 +225,9 @@ Emitted helpers are already conditional: `__orvoxResponse`, the validation error
 
 ## Working on ORVOX
 
+Bun is not a dependency of this workspace — install it yourself, since the
+compiler targets whichever `bun` is on your `PATH`.
+
 ```bash
 pnpm install
 ```
