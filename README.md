@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.1.1</code> · MIT · requires Bun 1.4+
+  <code>0.1.2</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
