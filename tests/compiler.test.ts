@@ -87,19 +87,28 @@ describe("compileSource", () => {
     );
   });
 
-  test("rejects non-literal route paths", () => {
-    const source = `
+  test("takes a route path from a const, but not from an expression", () => {
+    const shared = compileSource(`
       import { orvox } from "@orvox/core"
       const app = orvox()
       const path = "/dynamic"
-      app.get(path, () => "nope")
+      app.get(path, () => "ok")
       export default app
-    `;
+    `, { entryPath: "src/app.ts" });
+    expect(shared.manifest.routes[0]!.path).toBe("/dynamic");
 
-    expect(() => compileSource(source, { entryPath: "src/app.ts" })).toThrow(
+    // still refused: the compiler cannot read a path it would have to run code
+    // to know
+    expect(() => compileSource(`
+      import { orvox } from "@orvox/core"
+      const app = orvox()
+      const base = "/x"
+      app.get(base + "/y", () => "nope")
+      export default app
+    `, { entryPath: "src/app.ts" })).toThrow(
       new CompileError(
         "ORVOX_LITERAL_PATH_REQUIRED",
-        "Route paths must be string literals.",
+        "Route paths must be string literals, or a top-level const holding one.",
       ),
     );
   });

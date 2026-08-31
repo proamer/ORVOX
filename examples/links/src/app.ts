@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { derive, guard, header, orvox, t, type Infer } from "@orvox/core";
+import { derive, guard, header, orvox, t } from "@orvox/core";
+import { Code, Link, ListQuery, NewLink } from "./schemas.ts";
 
 // Module-level setup the compiler has to carry through untouched: a real
 // connection, real prepared statements, real helpers.
@@ -43,29 +44,6 @@ const newCode = () =>
 
 const live = (row: Row) => row.expires_at === null || row.expires_at > Date.now();
 
-// A link is either an external URL or a pointer at another code, and the two
-// carry different fields. The tag is what the compiler switches on.
-const NewLink = t.union("kind", [
-  t.object({
-    kind: t.literal("url"),
-    target: t.string({ min: 8, max: 2048 }),
-    ttlHours: t.optional(t.int({ min: 1, max: 8760 })),
-  }),
-  t.object({
-    kind: t.literal("alias"),
-    of: t.string({ min: 7, max: 7 }),
-  }),
-]);
-
-const Link = t.object({
-  code: t.string(),
-  target: t.string(),
-  kind: t.enum(["url", "alias"]),
-  hits: t.int(),
-  createdAt: t.int(),
-});
-
-type Link = Infer<typeof Link>;
 
 const present = (row: Row): Link => ({
   code: row.code,
@@ -114,11 +92,7 @@ const caller = derive(({ headers }) => ({ caller: headers["x-caller"] ?? "anonym
 
 app.group("/api", { use: [apiKey, header("cache-control", "no-store")] }, api => {
   api.get("/links", {
-    query: t.object({
-      after: t.optional(t.string({ min: 1, max: 7 })),
-      limit: t.optional(t.int({ min: 1, max: 100 })),
-      kind: t.optional(t.enum(["url", "alias"])),
-    }),
+    query: ListQuery,
     handler: ({ query }) => {
       const rows = statements.page.all(query.after ?? "", query.limit ?? 20);
       const filtered = query.kind ? rows.filter(row => row.kind === query.kind) : rows;
@@ -150,7 +124,7 @@ app.group("/api", { use: [apiKey, header("cache-control", "no-store")] }, api =>
 
   api.group("/links/:code", { use: [caller] }, one => {
     one.get("/stats", {
-      params: t.object({ code: t.string({ min: 7, max: 7 }) }),
+      params: Code,
       response: t.object({ code: t.string(), hits: t.int(), readBy: t.string() }),
       handler: ({ params, caller: by }) => {
         const row = statements.byCode.get(params.code);
@@ -160,7 +134,7 @@ app.group("/api", { use: [apiKey, header("cache-control", "no-store")] }, api =>
     });
 
     one.delete("", {
-      params: t.object({ code: t.string({ min: 7, max: 7 }) }),
+      params: Code,
       handler: ({ params }) => {
         if (!statements.byCode.get(params.code)) {
           return new Response("Not Found", { status: 404 });

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
@@ -67,6 +68,12 @@ export type AnalysisReport = {
 export type CompileSourceOptions = {
   entryPath: string;
   outputPath?: string;
+  /**
+   * Opens a relative import so schemas and middleware can live in their own
+   * files. `compile()` supplies a filesystem-backed one; without it only the
+   * entry file's declarations are visible.
+   */
+  readModule?: ModuleReader;
 };
 
 export type CompileResult = {
@@ -536,6 +543,88 @@ const middlewareBuilders = (sourceFile: ts.SourceFile) => {
   return builders;
 };
 
+export type ModuleReader = (specifier: string, fromPath: string) =>
+  { path: string; text: string } | undefined;
+
+type ModuleContext = {
+  namespaces: Set<string>;
+  builders: Map<string, "header" | "guard" | "derive">;
+  declarations: Map<string, ts.Expression>;
+  /** Bindings that came from a relative import the reader could not open. */
+  unresolved: Map<string, string>;
+};
+
+/**
+ * Declarations reachable from the entry, following relative imports.
+ *
+ * Schemas and middleware are consumed at build time, so pulling their
+ * expressions across a module boundary costs nothing at runtime -- which is what
+ * lets an app keep its schemas in schemas.ts instead of one enormous entry file.
+ * The entry's own declarations win any name collision.
+ */
+const collectModuleContext = (
+  entry: ts.SourceFile,
+  read: ModuleReader | undefined,
+): ModuleContext => {
+  const context: ModuleContext = {
+    namespaces: new Set(schemaNamespaces(entry)),
+    builders: new Map(middlewareBuilders(entry)),
+    declarations: new Map(topLevelInitializers(entry)),
+    unresolved: new Map(),
+  };
+  if (!read) return context;
+
+  const seen = new Set<string>([entry.fileName]);
+  const queue: ts.SourceFile[] = [entry];
+  while (queue.length) {
+    const file = queue.shift()!;
+    for (const statement of file.statements) {
+      if (
+        !ts.isImportDeclaration(statement) ||
+        !ts.isStringLiteral(statement.moduleSpecifier) ||
+        !statement.moduleSpecifier.text.startsWith(".")
+      ) continue;
+      const specifier = statement.moduleSpecifier.text;
+      const bindings = statement.importClause?.namedBindings;
+      const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : [];
+      const source = read(specifier, file.fileName);
+      if (!source) {
+        for (const element of named) context.unresolved.set(element.name.text, specifier);
+        continue;
+      }
+      if (!seen.has(source.path)) {
+        seen.add(source.path);
+        const imported = ts.createSourceFile(
+          source.path,
+          source.text,
+          ts.ScriptTarget.Latest,
+          true,
+          ts.ScriptKind.TS,
+        );
+        queue.push(imported);
+        for (const name of schemaNamespaces(imported)) context.namespaces.add(name);
+        for (const [name, kind] of middlewareBuilders(imported)) {
+          if (!context.builders.has(name)) context.builders.set(name, kind);
+        }
+        const locals = topLevelInitializers(imported);
+        for (const [name, initializer] of locals) {
+          if (!context.declarations.has(name)) context.declarations.set(name, initializer);
+        }
+        // `import { A as B }` has to reach the same declaration under B.
+        for (const element of named) {
+          const exported = (element.propertyName ?? element.name).text;
+          const initializer = locals.get(exported);
+          if (initializer && !context.declarations.has(element.name.text)) {
+            context.declarations.set(element.name.text, initializer);
+          }
+        }
+      }
+    }
+  }
+  return context;
+};
+
+
 const deriveKeys = (handler: HandlerNode) => {
   let output: ts.Expression | undefined;
   if (!ts.isBlock(handler.body)) output = unwrap(handler.body);
@@ -646,6 +735,13 @@ const parseMiddlewareInput = (
 ) => {
   if (!input) return [];
   input = unwrap(input);
+  if (ts.isIdentifier(input)) {
+    const initializer = declarations.get(input.text);
+    if (initializer && ts.isArrayLiteralExpression(unwrap(initializer))) {
+      usedDeclarations.add(input.text);
+      input = unwrap(initializer);
+    }
+  }
   const expressions = ts.isArrayLiteralExpression(input)
     ? input.elements.map(element => {
         if (!ts.isExpression(element) || ts.isSpreadElement(element)) {
@@ -678,21 +774,28 @@ const parseRoutes = (
   sourceFile: ts.SourceFile,
   appName: string,
   warnings: AnalysisWarning[],
+  modules: ModuleContext,
 ) => {
-  const namespaces = schemaNamespaces(sourceFile);
-  const declarations = topLevelInitializers(sourceFile);
+  const { namespaces, declarations, unresolved } = modules;
+  /** Follows a top-level const to the literal it holds, so paths and prefixes can be shared. */
+  const literalFrom = (node: ts.Expression | undefined, code: string, message: string) => {
+    const resolved = node && ts.isIdentifier(unwrap(node))
+      ? declarations.get((unwrap(node) as ts.Identifier).text) ?? node
+      : node;
+    return literalText(resolved && unwrap(resolved), code, message);
+  };
   const usedSchemas = new Set<string>();
-  const builders = middlewareBuilders(sourceFile);
+  const builders = modules.builders;
   const usedMiddleware = new Set<string>();
   const addGroup = (
     call: ts.CallExpression,
     parentPrefix: string,
     parentMiddleware: CompiledMiddleware[],
   ) => {
-    const localPrefix = literalText(
+    const localPrefix = literalFrom(
       call.arguments[0],
       "ORVOX_LITERAL_GROUP_PREFIX_REQUIRED",
-      "Group prefixes must be string literals.",
+      "Group prefixes must be string literals, or a top-level const holding one.",
     );
     validatePath(localPrefix);
     if (localPrefix.length > 1 && localPrefix.endsWith("/")) {
@@ -807,10 +910,10 @@ const parseRoutes = (
         `Unsupported HTTP method "${method}".`,
       );
     }
-    const localPath = literalText(
+    const localPath = literalFrom(
       call.arguments[raw ? 1 : 0],
       "ORVOX_LITERAL_PATH_REQUIRED",
-      "Route paths must be string literals.",
+      "Route paths must be string literals, or a top-level const holding one.",
     );
     const path = joinRoutePath(prefix, localPath);
     validatePath(path);
@@ -935,10 +1038,31 @@ const parseRoutes = (
         usedMiddleware,
       );
     }
+    // A handler named by a top-level const is still statically readable: resolve
+    // it the way schemas and middleware already resolve, and let the declaration
+    // be erased once its body has been inlined.
+    if (handler && ts.isIdentifier(unwrap(handler))) {
+      const name = (unwrap(handler) as ts.Identifier).text;
+      const initializer = declarations.get(name);
+      if (!initializer) {
+        throw new CompileError(
+          "ORVOX_INLINE_HANDLER_REQUIRED",
+          `Route handler "${name}" must be a top-level const holding a function expression.`,
+        );
+      }
+      if (!isHandler(unwrap(initializer))) {
+        throw new CompileError(
+          "ORVOX_INLINE_HANDLER_REQUIRED",
+          `Route handler "${name}" must hold an arrow or function expression.`,
+        );
+      }
+      usedSchemas.add(name);
+      handler = unwrap(initializer);
+    }
     if (!isHandler(handler)) {
       throw new CompileError(
         "ORVOX_INLINE_HANDLER_REQUIRED",
-        "Route handlers must be inline arrow or function expressions in v0.1.",
+        "Route handlers must be inline arrow or function expressions, or a top-level const holding one.",
       );
     }
     const key = `${method} ${path}`;
@@ -2108,6 +2232,27 @@ ${shutdown}
   return `${blocks.join("\n\n")}\n`;
 };
 
+
+/**
+ * A name that failed to resolve may simply have come from an import that could
+ * not be opened. Saying "must be a top-level const" about a const that plainly
+ * is one, in another file, sends people looking in the wrong place.
+ */
+const withImportContext = <T>(modules: ModuleContext, run: () => T): T => {
+  try {
+    return run();
+  } catch (error) {
+    if (!(error instanceof CompileError) || !modules.unresolved.size) throw error;
+    const name = /"([^"]+)"/.exec(error.message)?.[1];
+    const specifier = name && modules.unresolved.get(name);
+    if (!specifier) throw error;
+    throw new CompileError(
+      error.code,
+      `"${name}" is imported from "${specifier}", which could not be read.`,
+    );
+  }
+};
+
 export function compileSource(
   source: string,
   options: CompileSourceOptions,
@@ -2133,7 +2278,10 @@ export function compileSource(
 
   const appName = findAppName(sourceFile);
   const warnings: AnalysisWarning[] = [];
-  const { routes, globalHeaders, usedSchemas } = parseRoutes(sourceFile, appName, warnings);
+  const modules = collectModuleContext(sourceFile, options.readModule);
+  const parsed = withImportContext(modules, () =>
+    parseRoutes(sourceFile, appName, warnings, modules));
+  const { routes, globalHeaders, usedSchemas } = parsed;
   const { hooks, websockets } = parseRuntime(sourceFile, appName);
   if (!routes.length && !websockets.length) {
     throw new CompileError("ORVOX_ROUTE_REQUIRED", "No routes were found.");
@@ -2179,6 +2327,18 @@ export function compileSource(
   };
 }
 
+
+/** Resolves `./x`, `./x.ts`, and `./x/index.ts` the way Bun would. */
+const filesystemModuleReader: ModuleReader = (specifier, fromPath) => {
+  const base = resolve(dirname(fromPath), specifier);
+  for (const candidate of [base, `${base}.ts`, resolve(base, "index.ts")]) {
+    try {
+      return { path: candidate, text: readFileSync(candidate, "utf8") };
+    } catch {}
+  }
+  return undefined;
+};
+
 export async function compile(
   entryPath: string,
   options: { outDir?: string } = {},
@@ -2193,6 +2353,7 @@ export async function compile(
   const result = compileSource(source, {
     entryPath: absoluteEntry,
     outputPath: serverPath,
+    readModule: filesystemModuleReader,
   });
   await mkdir(outDir, { recursive: true });
   await Promise.all([

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.4.0</code> · MIT · requires Bun 1.4+
+  <code>0.5.0</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -231,13 +231,14 @@ how to reproduce it: [benchmarks/README.md](benchmarks/README.md).
 - **`app.use()` is positional.** Global middleware applies to the routes declared *after* it. Declaring it late is legal but raises `ORVOX_LATE_GLOBAL_MIDDLEWARE` in `analysis.json`.
 - **`header()` covers the whole route.** Static headers reach handler results, guard short-circuits, and validation `400`s alike. Globally registered ones also reach the fallback `404` / `405` / `OPTIONS` and the error handler.
 - **Groups nest, and middleware accumulates outward-in.** A nested group runs everything its ancestors declared, then its own. `group.use()` still fails the build — middleware belongs in the group options, where it is visible.
-- **Everything must be statically readable.** Route paths, schemas, middleware, and hooks are top-level literal declarations with inline handlers. The compiler refuses what it cannot see rather than guessing.
+- **Everything must be statically readable** — which is not the same as everything living in one file. Schemas, middleware, and handlers can be top-level `const`s, imported from other modules, and reached through a chain of them; route paths and group prefixes can come from a `const` too. What the compiler refuses is what it would have to *run* to know: a route registered in a loop, behind an `if`, or inside a function.
 - **Schema bounds are integers** for `t.int()` and item counts; `t.number()` takes fractional ones.
 - **Unions name their tag.** `t.union("type", [...])` compiles to a `switch`, so a failure is reported against the branch the tag selected rather than as "nothing matched". Every branch must be a `t.object()` setting that tag to a distinct literal; anything else fails the build naming the branch.
 
 ## Feature status
 
 - [x] Compile-time router — `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `raw`, and typed path params
+- [x] Declarations across modules — schemas, middleware, and handlers resolve through relative imports
 - [x] Compiled validation — objects, arrays, optionals, numbers, literals, enums, tagged unions, closed bodies
 - [x] Flattened middleware — `header()`, `guard()`, `derive()`, and `group()` prefixes
 - [x] Production runtime — `onRequest` / `onError` / `onStop`, body-size limits, graceful shutdown
