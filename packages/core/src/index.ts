@@ -30,13 +30,18 @@ export type QueryContext<QuerySchema> = QuerySchema extends AnySchema
   ? Infer<QuerySchema>
   : RawQuery;
 
+/** Path params are strings unless a schema declares otherwise. */
+export type ParamsContext<Path extends string, ParamsSchema> =
+  ParamsSchema extends AnySchema ? Infer<ParamsSchema> : RouteParams<Path>;
+
 export type RouteContext<
   Path extends string,
   Body = unknown,
   Extension extends object = Record<never, never>,
   Query = RawQuery,
+  Params = RouteParams<Path>,
 > = {
-  readonly params: RouteParams<Path>;
+  readonly params: Params;
   readonly body: Body;
   readonly query: Query;
   readonly headers: Readonly<Record<string, string | null>>;
@@ -51,8 +56,9 @@ export type RouteHandler<
   Body = unknown,
   Extension extends object = Record<never, never>,
   Query = RawQuery,
+  Params = RouteParams<Path>,
 > = (
-  context: RouteContext<Path, Body, Extension, Query>,
+  context: RouteContext<Path, Body, Extension, Query, Params>,
 ) => Result | Promise<Result>;
 
 export type RawHandler<Path extends string> = (
@@ -82,27 +88,66 @@ export type WebSocketRoute = Readonly<{
   ) => void | Promise<void>;
 }>;
 
-export type BodyRouteOptions<
+
+
+
+/** What a declared body schema makes `body`; without one it stays unknown. */
+export type BodyContext<BodySchema> = BodySchema extends AnySchema
+  ? Infer<BodySchema>
+  : unknown;
+
+type UseExtension<Use> = Use extends MiddlewareInput
+  ? MiddlewareExtension<Use>
+  : Record<never, never>;
+
+/**
+ * Every route option in one shape. Each schema is optional and independent, so
+ * `{ body }`, `{ query, use }`, and all the rest infer from the same overload
+ * instead of needing one per combination.
+ */
+export type RouteOptions<
   Path extends string,
-  BodySchema extends AnySchema,
   Result,
-  Extension extends object = Record<never, never>,
-  QuerySchema = unknown,
+  Extension extends object,
+  BodySchema,
+  QuerySchema,
+  ParamsSchema,
+  Use,
 > = Readonly<{
-  body: BodySchema;
+  body?: BodySchema;
   query?: QuerySchema;
-  handler: RouteHandler<Path, Result, Infer<BodySchema>, Extension, QueryContext<QuerySchema>>;
+  params?: ParamsSchema;
+  use?: Use;
+  handler: RouteHandler<
+    Path,
+    Result,
+    BodyContext<BodySchema>,
+    Extension & UseExtension<Use>,
+    QueryContext<QuerySchema>,
+    ParamsContext<Path, ParamsSchema>
+  >;
 }>;
 
-/** `{ query, handler }` with no body and no middleware. */
-export type QueryRouteOptions<
+/** The same, minus `body`, for methods that do not read one. */
+export type BodylessRouteOptions<
   Path extends string,
-  QuerySchema extends AnySchema,
   Result,
-  Extension extends object = Record<never, never>,
+  Extension extends object,
+  QuerySchema,
+  ParamsSchema,
+  Use,
 > = Readonly<{
-  query: QuerySchema;
-  handler: RouteHandler<Path, Result, unknown, Extension, Infer<QuerySchema>>;
+  query?: QuerySchema;
+  params?: ParamsSchema;
+  use?: Use;
+  handler: RouteHandler<
+    Path,
+    Result,
+    unknown,
+    Extension & UseExtension<Use>,
+    QueryContext<QuerySchema>,
+    ParamsContext<Path, ParamsSchema>
+  >;
 }>;
 
 export type MiddlewareContext = RouteContext<string> & Record<string, any>;
@@ -139,33 +184,7 @@ type JoinPath<Prefix extends string, Path extends string> = Prefix extends ""
   ? Path
   : `${Prefix}${Path}`;
 
-type MiddlewareRouteOptions<
-  Path extends string,
-  Result,
-  Body,
-  Extension extends object,
-  Use extends MiddlewareInput,
-  QuerySchema = unknown,
-> = Readonly<{
-  use: Use;
-  query?: QuerySchema;
-  handler: RouteHandler<
-    Path,
-    Result,
-    Body,
-    Extension & MiddlewareExtension<Use>,
-    QueryContext<QuerySchema>
-  >;
-}>;
 
-type MiddlewareBodyRouteOptions<
-  Path extends string,
-  Result,
-  BodySchema extends AnySchema,
-  Extension extends object,
-  Use extends MiddlewareInput,
-> = MiddlewareRouteOptions<Path, Result, Infer<BodySchema>, Extension, Use> &
-  Readonly<{ body: BodySchema }>;
 
 export interface OrvoxApp<
   Extension extends object = Record<never, never>,
@@ -175,98 +194,85 @@ export interface OrvoxApp<
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
   ): this;
-  get<const Path extends string, const Use extends MiddlewareInput, Result>(
+  get<
+    const Path extends string,
+    QuerySchema,
+    ParamsSchema,
+    const Use extends MiddlewareInput | undefined,
+    Result,
+  >(
     path: Path,
-    options: MiddlewareRouteOptions<JoinPath<Prefix, Path>, Result, unknown, Extension, Use>,
-  ): this;
-  get<const Path extends string, QuerySchema extends AnySchema, Result>(
-    path: Path,
-    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+    options: BodylessRouteOptions<
+      JoinPath<Prefix, Path>, Result, Extension, QuerySchema, ParamsSchema, Use
+    >,
   ): this;
   post<const Path extends string, Result>(
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
   ): this;
-  post<const Path extends string, BodySchema extends AnySchema, Result>(
-    path: Path,
-    options: BodyRouteOptions<JoinPath<Prefix, Path>, BodySchema, Result, Extension>,
-  ): this;
-  post<const Path extends string, const Use extends MiddlewareInput, Result>(
-    path: Path,
-    options: MiddlewareRouteOptions<JoinPath<Prefix, Path>, Result, unknown, Extension, Use>,
-  ): this;
   post<
     const Path extends string,
-    BodySchema extends AnySchema,
-    const Use extends MiddlewareInput,
+    BodySchema,
+    QuerySchema,
+    ParamsSchema,
+    const Use extends MiddlewareInput | undefined,
     Result,
   >(
     path: Path,
-    options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
-  ): this;
-  post<const Path extends string, QuerySchema extends AnySchema, Result>(
-    path: Path,
-    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+    options: RouteOptions<
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+    >,
   ): this;
   put<const Path extends string, Result>(
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
   ): this;
-  put<const Path extends string, BodySchema extends AnySchema, Result>(
+  put<
+    const Path extends string,
+    BodySchema,
+    QuerySchema,
+    ParamsSchema,
+    const Use extends MiddlewareInput | undefined,
+    Result,
+  >(
     path: Path,
-    options: BodyRouteOptions<JoinPath<Prefix, Path>, BodySchema, Result, Extension>,
-  ): this;
-  put<const Path extends string, const Use extends MiddlewareInput, Result>(
-    path: Path,
-    options: MiddlewareRouteOptions<JoinPath<Prefix, Path>, Result, unknown, Extension, Use>,
-  ): this;
-  put<const Path extends string, BodySchema extends AnySchema, const Use extends MiddlewareInput, Result>(
-    path: Path,
-    options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
-  ): this;
-  put<const Path extends string, QuerySchema extends AnySchema, Result>(
-    path: Path,
-    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+    options: RouteOptions<
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+    >,
   ): this;
   patch<const Path extends string, Result>(
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
   ): this;
-  patch<const Path extends string, BodySchema extends AnySchema, Result>(
+  patch<
+    const Path extends string,
+    BodySchema,
+    QuerySchema,
+    ParamsSchema,
+    const Use extends MiddlewareInput | undefined,
+    Result,
+  >(
     path: Path,
-    options: BodyRouteOptions<JoinPath<Prefix, Path>, BodySchema, Result, Extension>,
-  ): this;
-  patch<const Path extends string, const Use extends MiddlewareInput, Result>(
-    path: Path,
-    options: MiddlewareRouteOptions<JoinPath<Prefix, Path>, Result, unknown, Extension, Use>,
-  ): this;
-  patch<const Path extends string, BodySchema extends AnySchema, const Use extends MiddlewareInput, Result>(
-    path: Path,
-    options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
-  ): this;
-  patch<const Path extends string, QuerySchema extends AnySchema, Result>(
-    path: Path,
-    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+    options: RouteOptions<
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+    >,
   ): this;
   delete<const Path extends string, Result>(
     path: Path,
     handler: RouteHandler<JoinPath<Prefix, Path>, Result, unknown, Extension>,
   ): this;
-  delete<const Path extends string, BodySchema extends AnySchema, Result>(
+  delete<
+    const Path extends string,
+    BodySchema,
+    QuerySchema,
+    ParamsSchema,
+    const Use extends MiddlewareInput | undefined,
+    Result,
+  >(
     path: Path,
-    options: BodyRouteOptions<JoinPath<Prefix, Path>, BodySchema, Result, Extension>,
-  ): this;
-  delete<const Path extends string, const Use extends MiddlewareInput, Result>(
-    path: Path,
-    options: MiddlewareRouteOptions<JoinPath<Prefix, Path>, Result, unknown, Extension, Use>,
-  ): this;
-  delete<const Path extends string, BodySchema extends AnySchema, const Use extends MiddlewareInput, Result>(
-    path: Path,
-    options: MiddlewareBodyRouteOptions<JoinPath<Prefix, Path>, Result, BodySchema, Extension, Use>,
-  ): this;
-  delete<const Path extends string, QuerySchema extends AnySchema, Result>(
-    path: Path,
-    options: QueryRouteOptions<JoinPath<Prefix, Path>, QuerySchema, Result, Extension>,
+    options: RouteOptions<
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+    >,
   ): this;
   raw<const Path extends string>(
     method: HttpMethod,

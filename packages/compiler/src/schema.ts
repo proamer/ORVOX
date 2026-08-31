@@ -343,7 +343,9 @@ export function emitStringMapValidation(
 
   const lines = [`const ${target}: Record<string, unknown> = {};`];
   for (const property of schema.properties) {
-    const inner = property.schema.kind === "optional" ? property.schema.inner : property.schema;
+    // parseSchemaExpression already unwraps t.optional() into required:false,
+    // so property.schema is the primitive itself.
+    const inner = property.schema;
     if (inner.kind !== "string" && inner.kind !== "integer" && inner.kind !== "boolean") {
       throw new Error(`A ${label} must be a string, integer, or boolean.`);
     }

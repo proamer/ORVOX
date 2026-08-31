@@ -42,6 +42,7 @@ export type RouteManifestEntry = {
   responseMode: ResponseMode;
   schema?: SchemaIR;
   querySchema?: SchemaIR;
+  paramsSchema?: SchemaIR;
 };
 
 export type RoutesManifest = {
@@ -718,6 +719,7 @@ const parseRoutes = (
     let handler: ts.Expression | undefined = routeInput;
     let schema: SchemaIR | undefined;
     let querySchema: SchemaIR | undefined;
+    let paramsSchema: SchemaIR | undefined;
     let routeMiddleware: CompiledMiddleware[] = [];
     if (!raw && routeInput && ts.isObjectLiteralExpression(unwrap(routeInput))) {
       const options = unwrap(routeInput) as ts.ObjectLiteralExpression;
@@ -732,7 +734,7 @@ const parseRoutes = (
             "Route options must use static property assignments.",
           );
         }
-        if (!["handler", "body", "query", "use"].includes(property.name.text)) {
+        if (!["handler", "body", "query", "params", "use"].includes(property.name.text)) {
           throw new CompileError(
             "ORVOX_ROUTE_OPTION",
             `Unsupported route option "${property.name.text}".`,
@@ -768,11 +770,48 @@ const parseRoutes = (
           throw new CompileError("ORVOX_ROUTE_OPTION", "A query schema must be t.object().");
         }
         for (const property of querySchema.properties) {
-          const inner = property.schema.kind === "optional" ? property.schema.inner : property.schema;
-          if (!["string", "integer", "boolean"].includes(inner.kind)) {
+          if (!["string", "integer", "boolean"].includes(property.schema.kind)) {
             throw new CompileError(
               "ORVOX_ROUTE_OPTION",
               `Query parameter "${property.name}" must be a string, integer, or boolean.`,
+            );
+          }
+        }
+      }
+      const paramsOption = properties.get("params");
+      if (paramsOption) {
+        paramsSchema = parseSchemaExpression(
+          paramsOption,
+          namespaces,
+          declarations,
+          usedSchemas,
+          (code, message) => {
+            throw new CompileError(code, message);
+          },
+        );
+        if (paramsSchema.kind !== "object") {
+          throw new CompileError("ORVOX_ROUTE_OPTION", "A params schema must be t.object().");
+        }
+        const declared = new Set(pathParams(path));
+        for (const property of paramsSchema.properties) {
+          if (!declared.has(property.name)) {
+            throw new CompileError(
+              "ORVOX_ROUTE_OPTION",
+              `Path "${path}" declares no param "${property.name}".`,
+            );
+          }
+          // A matched route always supplies every param in its path, so an
+          // optional one describes a state the router cannot produce.
+          if (!property.required) {
+            throw new CompileError(
+              "ORVOX_ROUTE_OPTION",
+              `Path param "${property.name}" cannot be optional.`,
+            );
+          }
+          if (!["string", "integer", "boolean"].includes(property.schema.kind)) {
+            throw new CompileError(
+              "ORVOX_ROUTE_OPTION",
+              `Path param "${property.name}" must be a string, integer, or boolean.`,
             );
           }
         }
@@ -850,6 +889,7 @@ const parseRoutes = (
       middlewareNodes,
       ...(schema ? { schema } : {}),
       ...(querySchema ? { querySchema } : {}),
+      ...(paramsSchema ? { paramsSchema } : {}),
     });
   };
 
@@ -1329,10 +1369,11 @@ const valueForContextKey = (
   req: string,
   server: string,
   extensions: ReadonlyMap<string, string>,
+  convertedParams = false,
 ) => {
   const extension = extensions.get(key);
   if (extension) return extension;
-  if (key === "params") return `${req}.params`;
+  if (key === "params") return convertedParams ? "__orvoxParams" : `${req}.params`;
   if (key === "body") return "__orvoxBody";
   if (key === "query") return "__orvoxQuery";
   if (key === "headers") return "__orvoxHeaders";
@@ -1347,7 +1388,7 @@ const contextLiteral = (
   server: string,
   extensions: ReadonlyMap<string, string> = new Map(),
 ) => {
-  const properties = [`params: ${req}.params`];
+  const properties = [route.paramsSchema ? "params: __orvoxParams" : `params: ${req}.params`];
   if (route.needs.body) properties.push("body: __orvoxBody");
   if (route.needs.query) properties.push("query: __orvoxQuery");
   if (route.needs.headers) properties.push("headers: __orvoxHeaders");
@@ -1401,7 +1442,7 @@ const bindingInfo = (
     const keyText =
       ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : "";
     const local = (element.name as ts.Identifier).text;
-    const value = valueForContextKey(keyText, req, server, extensions);
+    const value = valueForContextKey(keyText, req, server, extensions, !!route.paramsSchema);
     lines.push(`const ${local} = ${value};`);
     properties.push(`${JSON.stringify(keyText)}: ${value}`);
   }
@@ -1430,6 +1471,15 @@ const requestPrelude = (route: CompiledRoute, req: string, headers = "") => {
       : `  return __orvoxInvalidJson(${headers});`);
     lines.push("}");
     if (route.schema) lines.push(...emitValidation(route.schema, "__orvoxBody", headers));
+  }
+  if (route.paramsSchema) {
+    lines.push(...emitStringMapValidation(
+      route.paramsSchema,
+      "__orvoxParams",
+      name => `${req}.params[${JSON.stringify(name)}]`,
+      headers,
+      "path param",
+    ));
   }
   if (route.needs.query) {
     if (route.querySchema) {
@@ -1614,7 +1664,7 @@ const generateRouteMethod = (
       ].join("\n"),
       needsHelper: true,
       needsInvalidJson: route.needs.body && !route.schema,
-      needsValidation: !!route.schema || !!route.querySchema,
+      needsValidation: !!route.schema || !!route.querySchema || !!route.paramsSchema,
     };
   }
 
@@ -1653,7 +1703,7 @@ const generateRouteMethod = (
     ].join("\n"),
     needsHelper: unknown,
     needsInvalidJson: route.needs.body && !route.schema,
-    needsValidation: !!route.schema || !!route.querySchema,
+    needsValidation: !!route.schema || !!route.querySchema || !!route.paramsSchema,
   };
 };
 
