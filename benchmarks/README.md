@@ -68,6 +68,41 @@ Two frameworks whose medians differ by less than either one's spread are tied.
 Publish medians and spread together; a median without its spread is a claim with
 its evidence removed.
 
+## Published results
+
+Full default configuration — 10 iterations, 20 seconds, concurrency 256, 160
+measurements — from the scheduled CI run on 2026-08-31
+([run 33350712418](https://github.com/proamer/ORVOX/actions/runs/33350712418)).
+The raw record is committed at
+[`published/2026-08-31-ubuntu-latest.json`](published/2026-08-31-ubuntu-latest.json),
+because CI artifacts expire and a published number without its evidence is
+worth nothing.
+
+`ubuntu-latest` · Linux 6.17.0-1022-azure · Xeon Platinum 8573C · 4 vCPU · 16 GB
+· Bun 1.4.0 · ORVOX 0.1.0-alpha.1 · Elysia 1.4.30 · Hono 4.13.5
+
+| Workload | bun-native | ORVOX | Elysia | Hono |
+| --- | ---: | ---: | ---: | ---: |
+| B01 plaintext | 190510 <sub>2.70%</sub> | **189953** <sub>1.75%</sub> | 170582 <sub>4.72%</sub> | 155635 <sub>6.07%</sub> |
+| B02 json | 188773 <sub>3.34%</sub> | **190108** <sub>1.36%</sub> | 160590 <sub>6.84%</sub> | 142272 <sub>3.54%</sub> |
+| B03 dynamic | 161305 <sub>6.44%</sub> | **163037** <sub>4.19%</sub> | 159322 <sub>6.44%</sub> | 137369 <sub>3.48%</sub> |
+| B04 params | 163638 <sub>8.49%</sub> | **163134** <sub>4.69%</sub> | 158709 <sub>5.74%</sub> | 136547 <sub>6.02%</sub> |
+
+Median req/s, with spread beneath. Applying the rule above — a gap smaller than
+either spread is a tie — the run says three things:
+
+- **ORVOX matches raw `Bun.serve` everywhere.** The gap runs from −0.3% to +1.1% and never leaves the noise on any workload. That is the whole thesis: the ergonomics cost nothing, because by request time there is no framework left to pay for.
+- **ORVOX is ahead of Hono on all four**, by 18.7% to 33.6%, comfortably outside the spread.
+- **Against Elysia the answer splits.** ORVOX leads by 11.4% and 18.4% on the static workloads, and ties on the dynamic two. That is the shape you would expect: eliminating per-request framework work pays most where the handler does least, and once real work dominates the field converges.
+
+ORVOX also has the lowest spread on three of four workloads. Nothing is matching
+a route, walking a schema, or iterating middleware per request, so there is less
+to jitter.
+
+Numbers on a shared runner are not a hardware claim. What the run supports is the
+comparison, since all four were measured in one sitting under one set of
+conditions.
+
 ## Running it
 
 ```bash

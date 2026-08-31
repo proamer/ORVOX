@@ -183,7 +183,7 @@ A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/c
 
 ## How it compares
 
-An architectural comparison, not a benchmark result. For numbers, run the lab yourself — see [benchmarks/README.md](benchmarks/README.md).
+An architectural comparison; measured throughput follows.
 
 | | **ORVOX** | Elysia | Hono | Raw `Bun.serve` |
 | :-- | :-: | :-: | :-: | :-: |
@@ -193,6 +193,33 @@ An architectural comparison, not a benchmark result. For numbers, run the lab yo
 | **Deployed dependencies** | None — the output imports nothing | Framework + validator | Framework + validator | None |
 | **Inspectability** | The whole server is one readable file | Framework internals | Framework internals | Full |
 | **OpenAPI** | Build artifact | Runtime schema walk | Manual | Manual |
+
+## Measured throughput
+
+Median req/s over 10 iterations of 20 seconds at concurrency 256, on
+`ubuntu-latest` (4 vCPU), from the
+[scheduled CI run](https://github.com/proamer/ORVOX/actions/runs/33350712418) of
+2026-08-31. Spread — `(max − min) / median` — is beneath each figure, and a gap
+smaller than either spread is a tie.
+
+| Workload | Raw `Bun.serve` | **ORVOX** | Elysia | Hono |
+| --- | ---: | ---: | ---: | ---: |
+| plaintext | 190510 <sub>2.70%</sub> | **189953** <sub>1.75%</sub> | 170582 <sub>4.72%</sub> | 155635 <sub>6.07%</sub> |
+| static JSON | 188773 <sub>3.34%</sub> | **190108** <sub>1.36%</sub> | 160590 <sub>6.84%</sub> | 142272 <sub>3.54%</sub> |
+| dynamic JSON | 161305 <sub>6.44%</sub> | **163037** <sub>4.19%</sub> | 159322 <sub>6.44%</sub> | 137369 <sub>3.48%</sub> |
+| path params | 163638 <sub>8.49%</sub> | **163134** <sub>4.69%</sub> | 158709 <sub>5.74%</sub> | 136547 <sub>6.02%</sub> |
+
+**ORVOX matches hand-written `Bun.serve` on every workload** — the gap runs from
+−0.3% to +1.1% and never leaves the noise. That is the point: by request time
+there is no framework left to pay for.
+
+Against Hono it leads by 18.7–33.6% everywhere. Against Elysia it leads by
+11.4% and 18.4% on the static workloads and ties on the dynamic two — compiling
+per-request work away pays most where the handler does least.
+
+Absolute numbers on a shared runner are not a hardware claim; the comparison is,
+since all four were measured in one sitting. Methodology, the raw record, and
+how to reproduce it: [benchmarks/README.md](benchmarks/README.md).
 
 ## Semantics worth knowing
 
