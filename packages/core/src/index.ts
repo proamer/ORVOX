@@ -91,6 +91,16 @@ export type WebSocketRoute = Readonly<{
 
 
 
+/**
+ * A declared response schema constrains what the handler may return, so drift
+ * between the document and the code is a build error rather than a surprise
+ * for whoever generated a client from it. Nothing is re-checked per request --
+ * the point of declaring it at compile time is that the hot path stays empty.
+ */
+export type ResultOf<ResponseSchema, Result> = ResponseSchema extends AnySchema
+  ? Infer<ResponseSchema> | Response
+  : Result;
+
 /** What a declared body schema makes `body`; without one it stays unknown. */
 export type BodyContext<BodySchema> = BodySchema extends AnySchema
   ? Infer<BodySchema>
@@ -112,15 +122,17 @@ export type RouteOptions<
   BodySchema,
   QuerySchema,
   ParamsSchema,
+  ResponseSchema,
   Use,
 > = Readonly<{
   body?: BodySchema;
   query?: QuerySchema;
   params?: ParamsSchema;
+  response?: ResponseSchema;
   use?: Use;
   handler: RouteHandler<
     Path,
-    Result,
+    ResultOf<ResponseSchema, Result>,
     BodyContext<BodySchema>,
     Extension & UseExtension<Use>,
     QueryContext<QuerySchema>,
@@ -135,14 +147,16 @@ export type BodylessRouteOptions<
   Extension extends object,
   QuerySchema,
   ParamsSchema,
+  ResponseSchema,
   Use,
 > = Readonly<{
   query?: QuerySchema;
   params?: ParamsSchema;
+  response?: ResponseSchema;
   use?: Use;
   handler: RouteHandler<
     Path,
-    Result,
+    ResultOf<ResponseSchema, Result>,
     unknown,
     Extension & UseExtension<Use>,
     QueryContext<QuerySchema>,
@@ -198,12 +212,13 @@ export interface OrvoxApp<
     const Path extends string,
     QuerySchema,
     ParamsSchema,
+    ResponseSchema,
     const Use extends MiddlewareInput | undefined,
     Result,
   >(
     path: Path,
     options: BodylessRouteOptions<
-      JoinPath<Prefix, Path>, Result, Extension, QuerySchema, ParamsSchema, Use
+      JoinPath<Prefix, Path>, Result, Extension, QuerySchema, ParamsSchema, ResponseSchema, Use
     >,
   ): this;
   post<const Path extends string, Result>(
@@ -215,12 +230,13 @@ export interface OrvoxApp<
     BodySchema,
     QuerySchema,
     ParamsSchema,
+    ResponseSchema,
     const Use extends MiddlewareInput | undefined,
     Result,
   >(
     path: Path,
     options: RouteOptions<
-      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, ResponseSchema, Use
     >,
   ): this;
   put<const Path extends string, Result>(
@@ -232,12 +248,13 @@ export interface OrvoxApp<
     BodySchema,
     QuerySchema,
     ParamsSchema,
+    ResponseSchema,
     const Use extends MiddlewareInput | undefined,
     Result,
   >(
     path: Path,
     options: RouteOptions<
-      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, ResponseSchema, Use
     >,
   ): this;
   patch<const Path extends string, Result>(
@@ -249,12 +266,13 @@ export interface OrvoxApp<
     BodySchema,
     QuerySchema,
     ParamsSchema,
+    ResponseSchema,
     const Use extends MiddlewareInput | undefined,
     Result,
   >(
     path: Path,
     options: RouteOptions<
-      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, ResponseSchema, Use
     >,
   ): this;
   delete<const Path extends string, Result>(
@@ -266,12 +284,13 @@ export interface OrvoxApp<
     BodySchema,
     QuerySchema,
     ParamsSchema,
+    ResponseSchema,
     const Use extends MiddlewareInput | undefined,
     Result,
   >(
     path: Path,
     options: RouteOptions<
-      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, Use
+      JoinPath<Prefix, Path>, Result, Extension, BodySchema, QuerySchema, ParamsSchema, ResponseSchema, Use
     >,
   ): this;
   raw<const Path extends string>(

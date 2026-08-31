@@ -1,7 +1,7 @@
 {
   "name": "@orvox/cli",
   "description": "Build and development CLI for ORVOX",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/proamer/ORVOX.git", "directory": "packages/cli" },
   "type": "module",

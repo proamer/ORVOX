@@ -43,6 +43,7 @@ export type RouteManifestEntry = {
   schema?: SchemaIR;
   querySchema?: SchemaIR;
   paramsSchema?: SchemaIR;
+  responseSchema?: SchemaIR;
 };
 
 export type RoutesManifest = {
@@ -818,6 +819,7 @@ const parseRoutes = (
     let schema: SchemaIR | undefined;
     let querySchema: SchemaIR | undefined;
     let paramsSchema: SchemaIR | undefined;
+    let responseSchema: SchemaIR | undefined;
     let routeMiddleware: CompiledMiddleware[] = [];
     if (!raw && routeInput && ts.isObjectLiteralExpression(unwrap(routeInput))) {
       const options = unwrap(routeInput) as ts.ObjectLiteralExpression;
@@ -832,7 +834,7 @@ const parseRoutes = (
             "Route options must use static property assignments.",
           );
         }
-        if (!["handler", "body", "query", "params", "use"].includes(property.name.text)) {
+        if (!["handler", "body", "query", "params", "response", "use"].includes(property.name.text)) {
           throw new CompileError(
             "ORVOX_ROUTE_OPTION",
             `Unsupported route option "${property.name.text}".`,
@@ -914,6 +916,18 @@ const parseRoutes = (
           }
         }
       }
+      const responseOption = properties.get("response");
+      if (responseOption) {
+        responseSchema = parseSchemaExpression(
+          responseOption,
+          namespaces,
+          declarations,
+          usedSchemas,
+          (code, message) => {
+            throw new CompileError(code, message);
+          },
+        );
+      }
       routeMiddleware = parseMiddlewareInput(
         properties.get("use"),
         builders,
@@ -988,6 +1002,7 @@ const parseRoutes = (
       ...(schema ? { schema } : {}),
       ...(querySchema ? { querySchema } : {}),
       ...(paramsSchema ? { paramsSchema } : {}),
+      ...(responseSchema ? { responseSchema } : {}),
     });
   };
 
@@ -1785,14 +1800,30 @@ const generateOpenAPI = (routes: CompiledRoute[], info: OpenAPIDocument["info"])
   for (const route of routes) {
     const path = route.path.replace(/:([A-Za-z_$][\w$]*)/g, "{$1}");
     const operation: Record<string, unknown> = {};
-    if (route.params.length) {
-      operation.parameters = route.params.map(name => ({
-        name,
-        in: "path",
-        required: true,
-        schema: { type: "string" },
-      }));
-    }
+    const declaredParam = (name: string) =>
+      route.paramsSchema?.kind === "object"
+        ? route.paramsSchema.properties.find(property => property.name === name)
+        : undefined;
+    const parameters = [
+      ...route.params.map(name => {
+        const declared = declaredParam(name);
+        return {
+          name,
+          in: "path",
+          required: true,
+          schema: declared ? schemaToOpenAPI(declared.schema) : { type: "string" },
+        };
+      }),
+      ...(route.querySchema?.kind === "object"
+        ? route.querySchema.properties.map(property => ({
+            name: property.name,
+            in: "query",
+            required: property.required,
+            schema: schemaToOpenAPI(property.schema),
+          }))
+        : []),
+    ];
+    if (parameters.length) operation.parameters = parameters;
     if (route.schema) {
       operation.requestBody = {
         required: true,
@@ -1802,8 +1833,19 @@ const generateOpenAPI = (routes: CompiledRoute[], info: OpenAPIDocument["info"])
       };
     }
     operation.responses = {
-      "200": { description: "Successful response" },
-      ...(route.schema ? { "400": { description: "Validation failed" } } : {}),
+      "200": {
+        description: "Successful response",
+        ...(route.responseSchema
+          ? {
+              content: {
+                "application/json": { schema: schemaToOpenAPI(route.responseSchema) },
+              },
+            }
+          : {}),
+      },
+      ...(route.schema || route.querySchema || route.paramsSchema
+        ? { "400": { description: "Validation failed" } }
+        : {}),
     };
     (paths[path] ??= {})[route.method.toLowerCase()] = operation;
   }

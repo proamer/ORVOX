@@ -35,16 +35,26 @@ app.post("/users", {
   },
 });
 
-// Reading `query` is what makes the compiler emit a `new URL()` for this route.
-// The three routes below never touch it, so they never pay for one.
-app.get("/users", ({ query }) =>
-  [...users.values()]
-    .filter(user => !query.q || user.name.toLowerCase().includes(query.q.toLowerCase()))
-    .slice(0, Number(query.limit ?? 50)));
+// Declaring `query` is what makes the compiler emit a `new URL()` here, and it
+// arrives converted: limit is a number, not "50". The routes below never read a
+// query string, so they never pay for one.
+app.get("/users", {
+  query: t.object({
+    q: t.optional(t.string({ min: 1 })),
+    limit: t.optional(t.int({ min: 1, max: 100 })),
+  }),
+  handler: ({ query }) =>
+    [...users.values()]
+      .filter(user => !query.q || user.name.toLowerCase().includes(query.q.toLowerCase()))
+      .slice(0, query.limit ?? 50),
+});
 
-app.get("/users/:id", ({ params }) => {
-  const user = users.get(params.id);
-  return user ? Response.json(user) : new Response("Not Found", { status: 404 });
+app.get("/users/:id", {
+  params: t.object({ id: t.string({ min: 1 }) }),
+  handler: ({ params }) => {
+    const user = users.get(params.id);
+    return user ? Response.json(user) : new Response("Not Found", { status: 404 });
+  },
 });
 
 app.patch("/users/:id", {
@@ -77,7 +87,12 @@ const operator = derive(({ headers }) => ({ operator: headers["x-operator"] ?? "
 // A group is a prefix plus middleware, resolved at build time. Guards short-circuit
 // as an early `return` and never run for the public routes above.
 app.group("/admin", { use: [requireToken, operator] }, admin => {
-  admin.get("/stats", ({ operator }) => ({ users: users.size, readBy: operator }));
+  // A declared response is checked against the handler at build time and
+  // becomes the 200 body in openapi.json. Nothing runs per request.
+  admin.get("/stats", {
+    response: t.object({ users: t.int(), readBy: t.string() }),
+    handler: ({ operator }) => ({ users: users.size, readBy: operator }),
+  });
 
   admin.delete("/users", ({ operator }) => {
     const removed = users.size;

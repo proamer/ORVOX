@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.2.0</code> · MIT · requires Bun 1.4+
+  <code>0.3.0</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -175,7 +175,7 @@ A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/c
 | File | What it is |
 | --- | --- |
 | `server.generated.ts` | The server. This is the only file you deploy and run. |
-| `openapi.json` | OpenAPI 3.1, generated from the same IR the validators come from. `info` describes your API, so set it with `orvox({ openapi: { title, version } })` — it defaults to `{ title: "ORVOX API", version: "0.0.0" }`. |
+| `openapi.json` | OpenAPI 3.1, generated from the same IR the validators come from. Path and query parameters carry their declared types, and a route's `response:` schema becomes the `200` body. `info` describes your API, so set it with `orvox({ openapi: { title, version } })` — it defaults to `{ title: "ORVOX API", version: "0.0.0" }`. |
 | `routes.manifest.json` | Every route with its params, flattened middleware, response mode, and the exact request data it reads. |
 | `analysis.json` | Compiler warnings — dynamic context access, block-handler fallbacks, late global middleware. |
 
@@ -224,6 +224,7 @@ how to reproduce it: [benchmarks/README.md](benchmarks/README.md).
 ## Semantics worth knowing
 
 - **Bodies are closed.** Object schemas reject undeclared properties with a `400` / `unknown_property` issue, so nothing can smuggle extra fields into a handler and `Infer<>` is exactly what arrives. OpenAPI mirrors this with `additionalProperties: false`.
+- **`response` is checked by the type system, not at runtime.** A declared response constrains what the handler may return, so the document and the code cannot drift apart without the build saying so, and nothing is re-checked per request. Returning a `Response` stays legal — statuses and headers are not something a body schema describes.
 - **`query` and `params` convert as well as validate.** Those values arrive as strings, so a `t.int()` declared there parses rather than rejects, and the handler receives a number. A `t.int()` in a body still refuses a string — position decides, and there is no second set of builders. Query maps stay open, unlike bodies: undeclared parameters are ignored rather than rejected.
 - **`app.use()` is positional.** Global middleware applies to the routes declared *after* it. Declaring it late is legal but raises `ORVOX_LATE_GLOBAL_MIDDLEWARE` in `analysis.json`.
 - **`header()` covers the whole route.** Static headers reach handler results, guard short-circuits, and validation `400`s alike. Globally registered ones also reach the fallback `404` / `405` / `OPTIONS` and the error handler.
