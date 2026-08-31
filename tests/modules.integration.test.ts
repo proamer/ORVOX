@@ -164,3 +164,67 @@ test("an import that cannot be resolved says so, naming the file", async () => {
     `,
   })).rejects.toThrow(/nope\.ts/);
 });
+
+test("a handler from another file brings the helpers it calls with it", async () => {
+  const result = await build({
+    "src/util.ts": `
+      export const shout = (value: string) => value.toUpperCase();
+      export const wrap = (value: string) => ({ said: shout(value) });
+    `,
+    "src/handlers.ts": `
+      import { wrap } from "./util.ts";
+      const greeting = "hi";
+      export const hello = () => wrap(greeting);
+    `,
+    "src/app.ts": `
+      import { orvox } from "@orvox/core";
+      import { hello } from "./handlers.ts";
+      const app = orvox();
+      app.get("/hello", hello);
+      export default app;
+    `,
+  });
+
+  const server = await serve(result);
+  try {
+    // shout is two hops away: hello -> wrap -> shout, across two files
+    expect(await (await fetch(new URL("/hello", server.url))).json()).toEqual({ said: "HI" });
+  } finally {
+    await server.stop(true);
+    delete process.env.PORT;
+  }
+});
+
+test("middleware from another file keeps its template literals intact", async () => {
+  const result = await build({
+    "src/mw.ts": `
+      import { guard } from "@orvox/core";
+      export const key = guard(({ headers }) =>
+        headers.authorization === \`Bearer \${process.env.K ?? "dev"}\`
+          ? undefined
+          : new Response("Unauthorized", { status: 401 }));
+    `,
+    "src/app.ts": `
+      import { orvox } from "@orvox/core";
+      import { key } from "./mw.ts";
+      const app = orvox();
+      app.get("/a", { use: [key], handler: () => "ok" });
+      export default app;
+    `,
+  });
+
+  // printed against the wrong file, the template literal used to be spliced
+  // together from whatever characters sat at those offsets in the entry
+  expect(result.code).toContain('`Bearer ${process.env.K ?? "dev"}`');
+
+  const server = await serve(result);
+  try {
+    expect((await fetch(new URL("/a", server.url))).status).toBe(401);
+    expect((await fetch(new URL("/a", server.url), {
+      headers: { authorization: "Bearer dev" },
+    })).status).toBe(200);
+  } finally {
+    await server.stop(true);
+    delete process.env.PORT;
+  }
+});

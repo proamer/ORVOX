@@ -1444,6 +1444,21 @@ const bindingNames = (name: ts.BindingName, into: Set<string>) => {
  * Parent links are unavailable (the source is parsed without them and the emitted
  * nodes are synthetic), so scope is tracked on the way down instead.
  */
+
+/**
+ * The file a node was parsed from. The printer slices original text -- template
+ * literals especially -- out of the source file it is handed, so printing a node
+ * from another module against the entry file splices in whatever characters
+ * happen to sit at those offsets. That corrupts the output silently.
+ */
+const ownerFile = (node: ts.Node, fallback: ts.SourceFile): ts.SourceFile => {
+  try {
+    return node.getSourceFile() ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const referencedNames = (nodes: readonly ts.Node[]) => {
   const names = new Set<string>();
   const visit = (node: ts.Node, bound: ReadonlySet<string>) => {
@@ -1522,7 +1537,7 @@ const retainedSource = (
     printer.printNode(
       ts.EmitHint.Unspecified,
       rewriteRelativeModule(statement, entryPath, outputPath),
-      sourceFile,
+      ownerFile(statement, sourceFile),
     );
   const body = sourceFile.statements.filter(
     statement =>
@@ -1559,6 +1574,72 @@ const retainedSource = (
   }
   const dropped = (name: string) =>
     name === appName || (usedSchemas.has(name) && !retained.has(name));
+
+  // Handlers and middleware inlined from another module leave their file behind,
+  // but not the helpers they call. Those have to come with them or the output
+  // references names it never declares -- which only shows up as a 500.
+  const hoisted: string[] = [];
+  const provenance = new Map<string, string>();
+  const foreign = new Map<ts.SourceFile, Set<string>>();
+  for (const node of printedNodes) {
+    const owner = ownerFile(node, sourceFile);
+    if (owner === sourceFile) continue;
+    const needed = foreign.get(owner) ?? new Set<string>();
+    for (const name of referencedNames([node])) needed.add(name);
+    foreign.set(owner, needed);
+  }
+  for (const [file, needed] of foreign) {
+    const provides = new Map<string, ts.Statement>();
+    for (const statement of file.statements) {
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          if (ts.isIdentifier(declaration.name)) provides.set(declaration.name.text, statement);
+        }
+      } else if (
+        (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+        statement.name
+      ) {
+        provides.set(statement.name.text, statement);
+      } else if (ts.isImportDeclaration(statement)) {
+        const bindings = statement.importClause?.namedBindings;
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) provides.set(element.name.text, statement);
+        }
+        const name = statement.importClause?.name;
+        if (name) provides.set(name.text, statement);
+      }
+    }
+    const take = new Set<ts.Statement>();
+    const queue = [...needed];
+    const visited = new Set<string>();
+    while (queue.length) {
+      const name = queue.shift()!;
+      if (visited.has(name)) continue;
+      visited.add(name);
+      const statement = provides.get(name);
+      if (!statement || take.has(statement)) continue;
+      const owner = provenance.get(name);
+      if (owner && owner !== file.fileName) {
+        throw new CompileError(
+          "ORVOX_STATIC_DSL_REQUIRED",
+          `"${name}" is declared in both ${owner} and ${file.fileName}; the inlined code cannot say which one it meant.`,
+        );
+      }
+      provenance.set(name, file.fileName);
+      take.add(statement);
+      for (const reference of referencedNames([statement])) queue.push(reference);
+    }
+    for (const statement of file.statements) {
+      if (!take.has(statement)) continue;
+      hoisted.push(
+        printer.printNode(
+          ts.EmitHint.Unspecified,
+          rewriteRelativeModule(statement, file.fileName, outputPath),
+          file,
+        ),
+      );
+    }
+  }
 
   return body
     .flatMap(statement => {
@@ -1601,6 +1682,7 @@ const retainedSource = (
       }
       return [print(statement)];
     })
+    .concat(hoisted)
     .join("\n");
 };
 
@@ -1830,7 +1912,7 @@ const generateRouteMethod = (
 ) => {
   const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
   const print = (node: ts.Node) =>
-    printer.printNode(ts.EmitHint.Expression, node, sourceFile);
+    printer.printNode(ts.EmitHint.Expression, node, ownerFile(node, sourceFile));
   const headers = responseHeaders(route);
   const headersLiteral = headers.size ? JSON.stringify(Object.fromEntries(headers)) : "";
   const headerOptions = headersLiteral ? `, { headers: ${headersLiteral} }` : "";
@@ -2064,7 +2146,7 @@ const generateCode = (
   const globalOption = globalHeaderLiteral ? ", headers: __orvoxGlobalHeaders" : "";
   const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
   const print = (node: ts.Node) =>
-    printer.printNode(ts.EmitHint.Expression, node, sourceFile);
+    printer.printNode(ts.EmitHint.Expression, node, ownerFile(node, sourceFile));
   const groups = new Map<string, CompiledRoute[]>();
   for (const route of routes) {
     const group = groups.get(route.path) ?? [];

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.5.0</code> · MIT · requires Bun 1.4+
+  <code>0.5.1</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -167,8 +167,9 @@ export const server = Bun.serve({
 ```
 
 A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/crud/src/app.ts), and
-[examples/links/src/app.ts](examples/links/src/app.ts) is a link shortener on `bun:sqlite` — prepared
-statements, a tagged union body, cursor paging, nested groups, and a raw redirect route.
+[examples/links/src/app.ts](examples/links/src/app.ts) is a link shortener on `bun:sqlite`, and
+[examples/tasks](examples/tasks/src) is the same idea laid out the way a project actually is —
+`db.ts`, `schemas.ts`, `middleware.ts`, `handlers/`, and an `app.ts` that is only routes.
 
 ## Build output
 

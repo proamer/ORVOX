@@ -4,3 +4,4 @@ coverage/
 benchmarks/results/
 artifacts/
 *.tsbuildinfo
+examples/*/.orvox/

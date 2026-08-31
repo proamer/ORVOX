@@ -58,8 +58,12 @@ export type RouteHandler<
   Query = RawQuery,
   Params = RouteParams<Path>,
 > = (
+  // Result is the whole return type, promise included. Writing it as
+  // `Result | Promise<Result>` made inference pick one branch of a handler that
+  // returns an object in one place and a Response in another, and reject the
+  // other -- which every not-found check looks like.
   context: RouteContext<Path, Body, Extension, Query, Params>,
-) => Result | Promise<Result>;
+) => Result;
 
 export type RawHandler<Path extends string> = (
   request: BunRequest<Path>,
@@ -98,7 +102,7 @@ export type WebSocketRoute = Readonly<{
  * the point of declaring it at compile time is that the hot path stays empty.
  */
 export type ResultOf<ResponseSchema, Result> = ResponseSchema extends AnySchema
-  ? Infer<ResponseSchema> | Response
+  ? Infer<ResponseSchema> | Response | Promise<Infer<ResponseSchema> | Response>
   : Result;
 
 /** What a declared body schema makes `body`; without one it stays unknown. */
