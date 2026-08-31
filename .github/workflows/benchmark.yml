@@ -11,7 +11,7 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -23,7 +23,14 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: cargo install oha --version 1.15.0 --locked
+      # The release binary instead of `cargo install`, which spends ~8 minutes
+      # compiling oha before a single measurement runs.
+      - name: Install oha
+        run: |
+          curl -fsSL -o oha https://github.com/hatoo/oha/releases/download/v1.16.0/oha-linux-amd64
+          chmod +x oha
+          sudo mv oha /usr/local/bin/oha
+          oha --version
       - run: pnpm bench
       - id: result
         shell: bash
