@@ -294,3 +294,37 @@ describe("compileSource", () => {
     expect(code).not.toContain("@orvox/core");
   });
 });
+
+test("refuses a handler that re-reads a body the compiler already consumed", () => {
+  // Declaring `body` makes the emitted route call req.json(); reading the body
+  // again from `request` then always throws, so this compiled cleanly and 500'd
+  // on every request.
+  const source = `
+    import { orvox, t } from "@orvox/core"
+    const app = orvox()
+    app.post("/a", {
+      body: t.object({ n: t.int() }),
+      handler: async ({ body, request }) => ({ n: body.n, again: await request.text() }),
+    })
+    export default app
+  `;
+  expect(() => compileSource(source, { entryPath: "src/app.ts" })).toThrow(
+    new CompileError(
+      "ORVOX_UNSUPPORTED_CONTEXT",
+      'The body of "POST /a" is already parsed by its body schema; request.text() would read an empty stream.',
+    ),
+  );
+});
+
+test("still allows a body schema alongside the rest of the request", () => {
+  const result = compileSource(`
+    import { orvox, t } from "@orvox/core"
+    const app = orvox()
+    app.post("/a", {
+      body: t.object({ n: t.int() }),
+      handler: ({ body, request }) => ({ n: body.n, from: request.url }),
+    })
+    export default app
+  `, { entryPath: "src/app.ts" });
+  expect(result.manifest.routes[0]!.path).toBe("/a");
+});

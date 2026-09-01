@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.5.1</code> · MIT · requires Bun 1.4+
+  <code>0.5.2</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -166,10 +166,14 @@ export const server = Bun.serve({
 });
 ```
 
-A complete, runnable CRUD service lives in [examples/crud/src/app.ts](examples/crud/src/app.ts), and
-[examples/links/src/app.ts](examples/links/src/app.ts) is a link shortener on `bun:sqlite`, and
-[examples/tasks](examples/tasks/src) is the same idea laid out the way a project actually is —
-`db.ts`, `schemas.ts`, `middleware.ts`, `handlers/`, and an `app.ts` that is only routes.
+Four runnable examples, each written to exercise something the others do not:
+
+| Example | What it is for |
+| --- | --- |
+| [crud](examples/crud/src/app.ts) | The whole surface in one file — routes, schemas, middleware, groups, hooks |
+| [links](examples/links/src/app.ts) | A link shortener on `bun:sqlite`: prepared statements, a tagged union body, cursor paging, a raw redirect |
+| [tasks](examples/tasks/src) | The same idea laid out the way a project actually is — `db.ts`, `schemas.ts`, `middleware.ts`, `handlers/`, and an `app.ts` that is only routes |
+| [media](examples/media/src/app.ts) | A byte upload, a streamed response, server-sent events, and a WebSocket |
 
 ## Build output
 
@@ -227,6 +231,7 @@ how to reproduce it: [benchmarks/README.md](benchmarks/README.md).
 ## Semantics worth knowing
 
 - **Bodies are closed.** Object schemas reject undeclared properties with a `400` / `unknown_property` issue, so nothing can smuggle extra fields into a handler and `Infer<>` is exactly what arrives. OpenAPI mirrors this with `additionalProperties: false`.
+- **A body schema owns the body.** Declaring one makes the route parse it, so reading it again from `request` would get an empty stream — the compiler refuses that rather than letting it 500. The rest of `request` stays available.
 - **`response` is checked by the type system, not at runtime.** A declared response constrains what the handler may return, so the document and the code cannot drift apart without the build saying so, and nothing is re-checked per request. Returning a `Response` stays legal — statuses and headers are not something a body schema describes.
 - **`query` and `params` convert as well as validate.** Those values arrive as strings, so a `t.int()` declared there parses rather than rejects, and the handler receives a number. A `t.int()` in a body still refuses a string — position decides, and there is no second set of builders. Query maps stay open, unlike bodies: undeclared parameters are ignored rather than rejected.
 - **`app.use()` is positional.** Global middleware applies to the routes declared *after* it. Declaring it late is legal but raises `ORVOX_LATE_GLOBAL_MIDDLEWARE` in `analysis.json`.

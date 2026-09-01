@@ -770,6 +770,45 @@ const joinRoutePath = (prefix: string, path: string) => {
   return path === "/" ? prefix : `${prefix}${path}`;
 };
 
+
+const BODY_READERS = ["json", "text", "arrayBuffer", "formData", "blob", "bytes"];
+
+/**
+ * A declared body schema makes the emitted route call `req.json()`, which
+ * consumes the stream. A handler that then reads the body again off `request`
+ * gets an empty one -- it compiles, and 500s on every request. The compiler can
+ * see both facts, so it should say so instead.
+ */
+const rereadsBody = (handler: HandlerNode): string | undefined => {
+  const parameter = handler.parameters[0];
+  if (!parameter || !ts.isObjectBindingPattern(parameter.name)) return undefined;
+  let local: string | undefined;
+  for (const element of parameter.name.elements) {
+    const key = element.propertyName ?? element.name;
+    if ((ts.isIdentifier(key) || ts.isStringLiteralLike(key)) && key.text === "request") {
+      if (ts.isIdentifier(element.name)) local = element.name.text;
+    }
+  }
+  if (!local) return undefined;
+
+  let found: string | undefined;
+  const visit = (node: ts.Node) => {
+    if (
+      !found &&
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === local
+    ) {
+      const property = node.name.text;
+      if (property === "body") found = "request.body";
+      else if (BODY_READERS.includes(property)) found = `request.${property}()`;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(handler.body);
+  return found;
+};
+
 const parseRoutes = (
   sourceFile: ts.SourceFile,
   appName: string,
@@ -1111,7 +1150,16 @@ const parseRoutes = (
       }
     }
     mergeNeeds(needs, contextNeeds(handler, raw, key, warnings, extensions));
-    if (schema) needs.body = true;
+    if (schema) {
+      needs.body = true;
+      const reread = rereadsBody(handler);
+      if (reread) {
+        throw new CompileError(
+          "ORVOX_UNSUPPORTED_CONTEXT",
+          `The body of "${key}" is already parsed by its body schema; ${reread} would read an empty stream.`,
+        );
+      }
+    }
     if (querySchema) needs.query = true;
     routes.push({
       method: method as HttpMethod,

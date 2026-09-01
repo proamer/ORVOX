@@ -79,17 +79,24 @@ export type OrvoxOptions = Readonly<{
   openapi?: Readonly<{ title?: string; version?: string }>;
 }>;
 
+/**
+ * The return value is ignored, so it is typed `unknown` rather than
+ * `void | Promise<void>`: TypeScript only lets any value stand in for `void`
+ * when the return type is exactly `void`, and `socket.send()` returns the byte
+ * count -- which made the obvious `open: socket => socket.send("ready")` fail
+ * to typecheck.
+ */
 export type WebSocketRoute = Readonly<{
-  open?: (socket: ServerWebSocket<unknown>) => void | Promise<void>;
+  open?: (socket: ServerWebSocket<unknown>) => unknown;
   message: (
     socket: ServerWebSocket<unknown>,
     message: string | Buffer<ArrayBuffer>,
-  ) => void | Promise<void>;
+  ) => unknown;
   close?: (
     socket: ServerWebSocket<unknown>,
     code: number,
     reason: string,
-  ) => void | Promise<void>;
+  ) => unknown;
 }>;
 
 
@@ -308,9 +315,9 @@ export interface OrvoxApp<
     options: Readonly<{ use: Use }>,
     configure: (group: OrvoxApp<Extension & MiddlewareExtension<Use>, JoinPath<Prefix, GroupPrefix>>) => void,
   ): this;
-  onRequest(handler: (request: BunRequest<string>) => void | Promise<void>): this;
+  onRequest(handler: (request: BunRequest<string>) => unknown): this;
   onError(handler: (error: Error) => unknown | Promise<unknown>): this;
-  onStop(handler: (server: Server<unknown>) => void | Promise<void>): this;
+  onStop(handler: (server: Server<unknown>) => unknown): this;
   ws<const Path extends string>(path: Path, handlers: WebSocketRoute): this;
 }
 
