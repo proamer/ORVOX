@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.5.2</code> · MIT · requires Bun 1.4+
+  <code>0.5.3</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -197,7 +197,7 @@ An architectural comparison; measured throughput follows.
 | **Route matching** | Native Bun route table, built at compile time | Runtime dynamic tree | Runtime trie | Native route table, hand-written |
 | **Validation** | Inlined `if` statements | Runtime JIT (TypeBox) | Runtime parsing (Zod) | Hand-written |
 | **Middleware** | Flattened into the handler | Runtime chain | Runtime chain | None |
-| **Deployed dependencies** | None, unless a schema survives for a `type X = Infer<typeof X>` | Framework + validator | Framework + validator | None |
+| **Deployed dependencies** | None — imports are narrowed to what survives, and a compiled-away schema takes its import with it | Framework + validator | Framework + validator | None |
 | **Inspectability** | The whole server is one readable file | Framework internals | Framework internals | Full |
 | **OpenAPI** | Build artifact | Runtime schema walk | Manual | Manual |
 

@@ -228,3 +228,51 @@ test("middleware from another file keeps its template literals intact", async ()
     delete process.env.PORT;
   }
 });
+
+test("drops an import once nothing that survives still names it", async () => {
+  const result = await build({
+    "src/schemas.ts": `
+      import { t } from "@orvox/core";
+      export const A = t.object({ n: t.int() });
+      export const B = t.object({ s: t.string() });
+    `,
+    "src/app.ts": `
+      import { orvox } from "@orvox/core";
+      import { A, B } from "./schemas.ts";
+      const app = orvox();
+      app.post("/a", { body: A, handler: ({ body }) => body });
+      app.post("/b", { body: B, handler: ({ body }) => body });
+      export default app;
+    `,
+  });
+
+  // both compiled into checks, so the file that gets deployed imports nothing
+  // (import.meta.main is not an import statement)
+  expect(result.code.match(/^import .*/gm)).toBeNull();
+});
+
+test("narrows an import to the names that survive", async () => {
+  const result = await build({
+    "src/schemas.ts": `
+      import { t, type Infer } from "@orvox/core";
+      export const A = t.object({ n: t.int() });
+      export type A = Infer<typeof A>;
+      export const label = "kept";
+    `,
+    "src/app.ts": `
+      import { orvox } from "@orvox/core";
+      import { A, label } from "./schemas.ts";
+      const app = orvox();
+      app.post("/a", { body: A, handler: ({ body }) => ({ n: body.n, label }) });
+      export default app;
+    `,
+  });
+
+  // label is used by the handler and stays; A was compiled into checks and goes.
+  // A retained import also carries its own module's dependencies, which is why
+  // dropping the ones nothing needs is worth doing.
+  const imports = result.code.match(/^import .*/gm) ?? [];
+  expect(imports).toHaveLength(1);
+  expect(imports[0]).toContain("{ label }");
+  expect(imports[0]).not.toContain("A");
+});

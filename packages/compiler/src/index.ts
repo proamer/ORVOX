@@ -1597,7 +1597,9 @@ const retainedSource = (
   const compiled = new Map<string, ts.VariableDeclaration>();
   const roots: ts.Node[] = [...printedNodes];
   for (const statement of body) {
-    if (isCompilerImport(statement)) continue;
+    // An import naming X is not a use of X. Counting it made every import
+    // justify itself, so nothing could ever be narrowed away.
+    if (ts.isImportDeclaration(statement)) continue;
     if (!ts.isVariableStatement(statement)) {
       roots.push(statement);
       continue;
@@ -1691,20 +1693,36 @@ const retainedSource = (
 
   return body
     .flatMap(statement => {
-      if (isCompilerImport(statement)) {
+      // Named imports are narrowed to what survives, whoever they came from: a
+      // schema compiled into checks leaves its import behind otherwise, and the
+      // file that is supposed to be the only one you deploy still names the
+      // module it came from.
+      if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
         const clause = statement.importClause;
         const bindings = clause?.namedBindings;
-        if (!clause || !bindings || !ts.isNamedImports(bindings)) return [];
+        // A bare `import "./setup.ts"` is there for its side effects; a default
+        // or namespace import is kept whenever anything still names it.
+        if (!clause) return [print(statement)];
+        if (!bindings || !ts.isNamedImports(bindings)) {
+          const bound = clause.name?.text
+            ?? (bindings && ts.isNamespaceImport(bindings) ? bindings.name.text : undefined);
+          return bound && !references.has(bound) ? [] : [print(statement)];
+        }
         const kept = bindings.elements.filter(element => references.has(element.name.text));
         if (!kept.length) return [];
+        // the specifier has to come from the rewritten statement, or a relative
+        // path ends up resolved against the wrong directory
+        const rewritten = rewriteRelativeModule(statement, entryPath, outputPath);
+        const target = ts.isImportDeclaration(rewritten) && ts.isStringLiteral(rewritten.moduleSpecifier)
+          ? rewritten.moduleSpecifier.text
+          : (statement.moduleSpecifier as ts.StringLiteral).text;
         const typeOnly = clause.phaseModifier === ts.SyntaxKind.TypeKeyword;
         const names = kept.map(element => {
           const alias = element.propertyName ? `${element.propertyName.text} as ` : "";
           return `${!typeOnly && element.isTypeOnly ? "type " : ""}${alias}${element.name.text}`;
         });
-        const specifier = (statement.moduleSpecifier as ts.StringLiteral).text;
         return [
-          `import ${typeOnly ? "type " : ""}{ ${names.join(", ")} } from ${JSON.stringify(specifier)};`,
+          `import ${typeOnly ? "type " : ""}{ ${names.join(", ")} } from ${JSON.stringify(target)};`,
         ];
       }
       if (ts.isVariableStatement(statement)) {
