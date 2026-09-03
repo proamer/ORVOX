@@ -5,3 +5,4 @@ benchmarks/results/
 artifacts/
 *.tsbuildinfo
 examples/*/.orvox/
+.orvox-example-*/

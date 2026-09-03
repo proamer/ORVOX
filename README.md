@@ -275,7 +275,7 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` compiles the fixture app, type-checks the workspace *including the generated server*, and runs the full Bun test suite. It is the same gate CI runs.
+`pnpm check` compiles the fixture app, type-checks the workspace *including the generated server*, and runs the full Bun test suite — which builds all four examples and calls them, because every bug in the 0.5.x line compiled cleanly and only showed up when something made a request. It is the same gate CI runs.
 
 Benchmarks need [`oha`](https://github.com/hatoo/oha) installed. The smoke run verifies all four frameworks serve identical responses before any timing is trusted:
 
