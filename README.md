@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <code>0.5.3</code> · MIT · requires Bun 1.4+
+  <code>1.0.0</code> · MIT · requires Bun 1.4+
 </p>
 
 ---
@@ -197,7 +197,7 @@ An architectural comparison; measured throughput follows.
 | **Route matching** | Native Bun route table, built at compile time | Runtime dynamic tree | Runtime trie | Native route table, hand-written |
 | **Validation** | Inlined `if` statements | Runtime JIT (TypeBox) | Runtime parsing (Zod) | Hand-written |
 | **Middleware** | Flattened into the handler | Runtime chain | Runtime chain | None |
-| **Deployed dependencies** | None — imports are narrowed to what survives, and a compiled-away schema takes its import with it | Framework + validator | Framework + validator | None |
+| **Deployed dependencies** | None. `Infer<typeof X>` is written out as the type it means, so the schema behind it goes too | Framework + validator | Framework + validator | None |
 | **Inspectability** | The whole server is one readable file | Framework internals | Framework internals | Full |
 | **OpenAPI** | Build artifact | Runtime schema walk | Manual | Manual |
 
@@ -228,9 +228,28 @@ Absolute numbers on a shared runner are not a hardware claim; the comparison is,
 since all four were measured in one sitting. Methodology, the raw record, and
 how to reproduce it: [benchmarks/README.md](benchmarks/README.md).
 
+## What 1.0 means
+
+The API is stable. Everything below is settled, not provisional:
+
+- The route surface — `get`/`post`/`put`/`patch`/`delete`/`raw`, `body`, `query`, `params`, `response`, `use`, and nested `group`.
+- The schema builders and what `Infer<>` produces.
+- The `400` payload: `{ error: "VALIDATION_FAILED", issues: [{ path, code, message }] }`.
+- The build output: four files in `.orvox/`, and `server.generated.ts` as the one you deploy.
+
+What is *not* frozen is the shape of the emitted code. It is a build artifact, and
+it will keep changing as the compiler gets better at writing it.
+
+The constraints are the design, not a staging post. Routes must be visible at build
+time — no registering them in a loop, behind an `if`, or inside a function — because
+a route the compiler cannot see is a route it cannot compile away. Declarations may
+live wherever you like and reach each other through imports; it is running code to
+find them that is refused.
+
 ## Semantics worth knowing
 
 - **Bodies are closed.** Object schemas reject undeclared properties with a `400` / `unknown_property` issue, so nothing can smuggle extra fields into a handler and `Infer<>` is exactly what arrives. OpenAPI mirrors this with `additionalProperties: false`.
+- **`Infer<typeof X>` costs nothing.** It is replaced by the shape it means, so the schema it names is compiled away like any other and the output does not import `@orvox/core` for a type that is erased before the file runs.
 - **A body schema owns the body.** Declaring one makes the route parse it, so reading it again from `request` would get an empty stream — the compiler refuses that rather than letting it 500. The rest of `request` stays available.
 - **`response` is checked by the type system, not at runtime.** A declared response constrains what the handler may return, so the document and the code cannot drift apart without the build saying so, and nothing is re-checked per request. Returning a `Response` stays legal — statuses and headers are not something a body schema describes.
 - **`query` and `params` convert as well as validate.** Those values arrive as strings, so a `t.int()` declared there parses rather than rejects, and the handler receives a number. A `t.int()` in a body still refuses a string — position decides, and there is no second set of builders. Query maps stay open, unlike bodies: undeclared parameters are ignored rather than rejected.
@@ -275,7 +294,7 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` compiles the fixture app, type-checks the workspace *including the generated server*, and runs the full Bun test suite — which builds all four examples and calls them, because every bug in the 0.5.x line compiled cleanly and only showed up when something made a request. It is the same gate CI runs.
+`pnpm check` compiles the fixture app, type-checks the workspace *including the generated server*, and runs the full Bun test suite — which builds all four examples, calls them, and type-checks each generated server on its own. Every bug in the 0.5.x line compiled cleanly and only showed up when something made a request, so making a request is part of the gate. It is the same gate CI runs.
 
 Benchmarks need [`oha`](https://github.com/hatoo/oha) installed. The smoke run verifies all four frameworks serve identical responses before any timing is trusted:
 

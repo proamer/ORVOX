@@ -483,7 +483,11 @@ export function emitStringMapValidation(
   const invalid = (name: string, code: string, message: string) =>
     `return __orvoxValidationError(${JSON.stringify(`$.${name}`)}, ${JSON.stringify(code)}, ${JSON.stringify(message)}${suffix});`;
 
-  const lines = [`const ${target}: Record<string, unknown> = {};`];
+  // Built loose, then handed over under the type the schema describes -- the
+  // handler destructures this, so `Record<string, unknown>` would make every
+  // converted value `unknown` in the file that gets type-checked.
+  const accumulator = `${target}__raw`;
+  const lines = [`const ${accumulator}: Record<string, unknown> = {};`];
   for (const property of schema.properties) {
     // parseSchemaExpression already unwraps t.optional() into required:false,
     // so property.schema is the primitive itself.
@@ -501,21 +505,21 @@ export function emitStringMapValidation(
       if (inner.max !== undefined) {
         body.push(`if (${raw}.length > ${inner.max}) ${invalid(property.name, "max_length", `Expected at most ${inner.max} character${inner.max === 1 ? "" : "s"}.`)}`);
       }
-      body.push(`${target}[${JSON.stringify(property.name)}] = ${raw};`);
+      body.push(`${accumulator}[${JSON.stringify(property.name)}] = ${raw};`);
     } else if (inner.kind === "integer") {
       const number = `${raw}_n`;
       body.push(`const ${number} = Number(${raw});`);
       body.push(`if (${raw}.trim() === "" || !Number.isInteger(${number})) ${invalid(property.name, "invalid_type", "Expected an integer.")}`);
       if (inner.min !== undefined) body.push(`if (${number} < ${inner.min}) ${invalid(property.name, "min_value", `Expected a value greater than or equal to ${inner.min}.`)}`);
       if (inner.max !== undefined) body.push(`if (${number} > ${inner.max}) ${invalid(property.name, "max_value", `Expected a value less than or equal to ${inner.max}.`)}`);
-      body.push(`${target}[${JSON.stringify(property.name)}] = ${number};`);
+      body.push(`${accumulator}[${JSON.stringify(property.name)}] = ${number};`);
     } else if (inner.kind === "number") {
       const number = `${raw}_n`;
       body.push(`const ${number} = Number(${raw});`);
       body.push(`if (${raw}.trim() === "" || !Number.isFinite(${number})) ${invalid(property.name, "invalid_type", "Expected a number.")}`);
       if (inner.min !== undefined) body.push(`if (${number} < ${inner.min}) ${invalid(property.name, "min_value", `Expected a value greater than or equal to ${inner.min}.`)}`);
       if (inner.max !== undefined) body.push(`if (${number} > ${inner.max}) ${invalid(property.name, "max_value", `Expected a value less than or equal to ${inner.max}.`)}`);
-      body.push(`${target}[${JSON.stringify(property.name)}] = ${number};`);
+      body.push(`${accumulator}[${JSON.stringify(property.name)}] = ${number};`);
     } else if (inner.kind === "literal" || inner.kind === "enum") {
       // The wire only carries strings, so each allowed value is matched by the
       // text that would produce it and handed back as the declared type.
@@ -530,10 +534,10 @@ export function emitStringMapValidation(
       const mapped = values
         .map(value => `${raw} === ${JSON.stringify(String(value))} ? ${JSON.stringify(value)}`)
         .join(" : ");
-      body.push(`${target}[${JSON.stringify(property.name)}] = ${mapped} : ${raw};`);
+      body.push(`${accumulator}[${JSON.stringify(property.name)}] = ${mapped} : ${raw};`);
     } else {
       body.push(`if (${raw} !== "true" && ${raw} !== "false") ${invalid(property.name, "invalid_type", "Expected true or false.")}`);
-      body.push(`${target}[${JSON.stringify(property.name)}] = ${raw} === "true";`);
+      body.push(`${accumulator}[${JSON.stringify(property.name)}] = ${raw} === "true";`);
     }
 
     lines.push(`{`);
@@ -547,5 +551,35 @@ export function emitStringMapValidation(
     lines.push(`  }`);
     lines.push(`}`);
   }
+  lines.push(`const ${target} = ${accumulator} as ${schemaToTypeText(schema)};`);
   return lines;
+}
+
+/**
+ * The IR spelled out as a TypeScript type.
+ *
+ * `type X = Infer<typeof S>` is the documented way to name a body's shape, but
+ * it keeps S alive as a value and drags @orvox/core into the deployed file for
+ * a type that is erased anyway. The compiler already knows the shape, so it
+ * writes it out and lets S go.
+ */
+export function schemaToTypeText(schema: SchemaIR): string {
+  if (schema.kind === "string") return "string";
+  if (schema.kind === "integer" || schema.kind === "number") return "number";
+  if (schema.kind === "boolean") return "boolean";
+  if (schema.kind === "literal") return JSON.stringify(schema.value);
+  if (schema.kind === "enum") return schema.values.map(value => JSON.stringify(value)).join(" | ");
+  if (schema.kind === "optional") return `${schemaToTypeText(schema.inner)} | undefined`;
+  if (schema.kind === "union") {
+    return schema.branches.map(branch => `(${schemaToTypeText(branch)})`).join(" | ");
+  }
+  if (schema.kind === "array") {
+    const item = schemaToTypeText(schema.items);
+    return /^[A-Za-z0-9_$.]+$/.test(item) ? `${item}[]` : `Array<${item}>`;
+  }
+  const properties = schema.properties.map(property => {
+    const key = /^[A-Za-z_$][\w$]*$/.test(property.name) ? property.name : JSON.stringify(property.name);
+    return `${key}${property.required ? "" : "?"}: ${schemaToTypeText(property.schema)}`;
+  });
+  return properties.length ? `{ ${properties.join("; ")} }` : "{}";
 }

@@ -261,7 +261,7 @@ describe("compileSource", () => {
     expect(result.analysis.entry).toBe("src/app.ts");
   });
 
-  test("keeps schema declarations that surviving code still references", () => {
+  test("spells out an Infer instead of keeping the schema alive for it", () => {
     const source = `
       import { orvox, t, type Infer } from "@orvox/core"
       const CreateUser = t.object({ name: t.string() })
@@ -274,9 +274,27 @@ describe("compileSource", () => {
 
     const { code } = compileSource(source, { entryPath: "src/app.ts" });
 
-    expect(code).toContain('import { t, type Infer } from "@orvox/core";');
+    // the type is what the code needed; the schema behind it was compiled into
+    // checks, so neither it nor the import it required has any reason to ship
+    expect(code).toContain("type User = { name: string };");
+    expect(code).toContain("const store: User[] = [];");
+    expect(code).not.toContain("t.object(");
+    expect(code.match(/^import .*/gm)).toBeNull();
+  });
+
+  test("keeps a schema a surviving statement uses as a value", () => {
+    const source = `
+      import { orvox, t } from "@orvox/core"
+      const CreateUser = t.object({ name: t.string() })
+      const shapes = [CreateUser]
+      const app = orvox()
+      app.post("/users", { body: CreateUser, handler: () => shapes.length })
+      export default app
+    `;
+
+    const { code } = compileSource(source, { entryPath: "src/app.ts" });
     expect(code).toContain("const CreateUser = t.object({ name: t.string() });");
-    expect(code).not.toContain("orvox(");
+    expect(code).toContain('import { t } from "@orvox/core";');
   });
 
   test("drops schema declarations that nothing else references", () => {

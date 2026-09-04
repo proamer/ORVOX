@@ -276,3 +276,72 @@ test("narrows an import to the names that survive", async () => {
   expect(imports[0]).toContain("{ label }");
   expect(imports[0]).not.toContain("A");
 });
+
+test("expands Infer<typeof X> so the schema it names can still be erased", async () => {
+  const result = await build({
+    "src/schemas.ts": `
+      import { t, type Infer } from "@orvox/core";
+      export const CreateUser = t.object({
+        name: t.string({ min: 1 }),
+        role: t.enum(["admin", "member"]),
+        tags: t.optional(t.array(t.string())),
+      });
+      export type CreateUser = Infer<typeof CreateUser>;
+    `,
+    "src/app.ts": `
+      import { orvox } from "@orvox/core";
+      import { CreateUser } from "./schemas.ts";
+      const app = orvox();
+      const seen: CreateUser[] = [];
+      app.post("/users", {
+        body: CreateUser,
+        handler: ({ body }) => { seen.push(body); return { count: seen.length, role: body.role }; },
+      });
+      export default app;
+    `,
+  });
+
+  // the type survives, spelled out; the schema and its import do not
+  const flat = result.code.replace(/\s+/g, " ");
+  expect(flat).toContain("name: string");
+  expect(flat).toContain('role: "admin" | "member"');
+  expect(flat).toContain("tags?: string[]");
+  expect(result.code).not.toContain("Infer<");
+  expect(result.code).not.toContain("t.object(");
+  expect(result.code.match(/^import .*/gm)).toBeNull();
+
+  const server = await serve(result);
+  try {
+    const r = await fetch(new URL("/users", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "amp", role: "admin" }),
+    });
+    expect(await r.json()).toEqual({ count: 1, role: "admin" });
+  } finally {
+    await server.stop(true);
+    delete process.env.PORT;
+  }
+});
+
+test("expands an Infer used inside a larger type", async () => {
+  const result = await build({
+    "src/app.ts": `
+      import { orvox, t, type Infer } from "@orvox/core";
+      const app = orvox();
+      const Create = t.object({ name: t.string() });
+      type User = Infer<typeof Create> & { id: string };
+      const store: User[] = [];
+      app.post("/users", {
+        body: Create,
+        handler: ({ body }) => { store.push({ ...body, id: "1" }); return store[0]!; },
+      });
+      export default app;
+    `,
+  });
+
+  const flat = result.code.replace(/\s+/g, " ");
+  expect(flat).toContain("type User = { name: string } & { id: string; };");
+  expect(result.code).not.toContain("Infer<");
+  expect(result.code).not.toContain("t.object(");
+});

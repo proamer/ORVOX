@@ -7,6 +7,7 @@ import {
   emitValidation,
   parseSchemaExpression,
   schemaToOpenAPI,
+  schemaToTypeText,
   schemaNamespaces,
   topLevelInitializers,
   type SchemaIR,
@@ -550,6 +551,8 @@ type ModuleContext = {
   namespaces: Set<string>;
   builders: Map<string, "header" | "guard" | "derive">;
   declarations: Map<string, ts.Expression>;
+  /** Type aliases declared in imported modules, so a `type X = Infer<...>` can be brought over. */
+  typeAliases: Map<string, ts.TypeAliasDeclaration>;
   /** Bindings that came from a relative import the reader could not open. */
   unresolved: Map<string, string>;
 };
@@ -570,6 +573,7 @@ const collectModuleContext = (
     namespaces: new Set(schemaNamespaces(entry)),
     builders: new Map(middlewareBuilders(entry)),
     declarations: new Map(topLevelInitializers(entry)),
+    typeAliases: new Map(),
     unresolved: new Map(),
   };
   if (!read) return context;
@@ -605,6 +609,11 @@ const collectModuleContext = (
         for (const name of schemaNamespaces(imported)) context.namespaces.add(name);
         for (const [name, kind] of middlewareBuilders(imported)) {
           if (!context.builders.has(name)) context.builders.set(name, kind);
+        }
+        for (const statement of imported.statements) {
+          if (ts.isTypeAliasDeclaration(statement) && !context.typeAliases.has(statement.name.text)) {
+            context.typeAliases.set(statement.name.text, statement);
+          }
         }
         const locals = topLevelInitializers(imported);
         for (const [name, initializer] of locals) {
@@ -1245,6 +1254,7 @@ const parseRoutes = (
     routes,
     globalHeaders,
     usedSchemas: new Set([...usedSchemas, ...usedMiddleware]),
+    schemaNames: new Set(usedSchemas),
   };
 };
 
@@ -1507,9 +1517,72 @@ const ownerFile = (node: ts.Node, fallback: ts.SourceFile): ts.SourceFile => {
   }
 };
 
-const referencedNames = (nodes: readonly ts.Node[]) => {
+
+/**
+ * Rewrites `Infer<typeof S>` into the shape S describes, wherever it appears --
+ * alone, or inside something larger like `Infer<typeof S> & { id: string }`.
+ *
+ * Done on printed text rather than on nodes: a node parsed from a scratch file
+ * carries that file's offsets, and the printer slices original text from
+ * whatever source file it is handed, so synthesising one produced output spliced
+ * together from unrelated characters.
+ */
+const expandInferText = (text: string, schemaTypes: ReadonlyMap<string, string>) => {
+  let result = text;
+  for (const [name, type] of schemaTypes) {
+    // the printer writes exactly this, so no pattern matching is needed
+    result = result.split(`Infer<typeof ${name}>`).join(type);
+  }
+  return result;
+};
+
+/** Like referencedNames, but it never descends into a type. */
+const valueReferencedNames = (nodes: readonly ts.Node[]) => {
+  const names = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isTypeNode(node) || ts.isTypeAliasDeclaration(node)) return;
+    if (ts.isIdentifier(node)) {
+      names.add(node.text);
+      return;
+    }
+    if (ts.isPropertyAccessExpression(node)) {
+      visit(node.expression);
+      return;
+    }
+    if (ts.isPropertyAssignment(node)) {
+      if (ts.isComputedPropertyName(node.name)) visit(node.name);
+      visit(node.initializer);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  for (const node of nodes) visit(node);
+  return names;
+};
+
+const referencedNames = (
+  nodes: readonly ts.Node[],
+  /** Schemas whose `Infer<typeof X>` is expanded at print time. */
+  expandable: ReadonlySet<string> = new Set(),
+) => {
   const names = new Set<string>();
   const visit = (node: ts.Node, bound: ReadonlySet<string>) => {
+    // An expanded `Infer<typeof X>` names neither Infer nor X by the time the
+    // file is written, so counting either keeps a declaration alive for nothing.
+    if (
+      expandable.size &&
+      ts.isTypeReferenceNode(node) &&
+      ts.isIdentifier(node.typeName) &&
+      node.typeName.text === "Infer" &&
+      node.typeArguments?.length === 1
+    ) {
+      const argument = node.typeArguments[0]!;
+      if (
+        ts.isTypeQueryNode(argument) &&
+        ts.isIdentifier(argument.exprName) &&
+        expandable.has(argument.exprName.text)
+      ) return;
+    }
     if (ts.isIdentifier(node)) {
       if (!bound.has(node.text)) names.add(node.text);
       return;
@@ -1579,18 +1652,21 @@ const retainedSource = (
   outputPath: string,
   usedSchemas: ReadonlySet<string>,
   printedNodes: readonly ts.Node[],
+  schemaTypes: ReadonlyMap<string, string> = new Map(),
+  foreignTypes: ReadonlyMap<string, ts.TypeAliasDeclaration> = new Map(),
 ) => {
   const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
   const print = (statement: ts.Statement) =>
-    printer.printNode(
-      ts.EmitHint.Unspecified,
-      rewriteRelativeModule(statement, entryPath, outputPath),
-      ownerFile(statement, sourceFile),
+    expandInferText(
+      printer.printNode(
+        ts.EmitHint.Unspecified,
+        rewriteRelativeModule(statement, entryPath, outputPath),
+        ownerFile(statement, sourceFile),
+      ),
+      schemaTypes,
     );
-  const body = sourceFile.statements.filter(
-    statement =>
-      !isDefaultAppExport(statement, appName) && !isAppDslStatement(statement, appName),
-  );
+  const body = sourceFile.statements.filter(statement =>
+    !isDefaultAppExport(statement, appName) && !isAppDslStatement(statement, appName));
 
   // Compiled schema and middleware declarations disappear into the generated
   // checks, but only when nothing that survives compilation still names them.
@@ -1611,7 +1687,29 @@ const retainedSource = (
       else roots.push(declaration);
     }
   }
-  const references = referencedNames(roots);
+  const references = referencedNames(roots, new Set(schemaTypes.keys()));
+
+  const hoistedTypes: string[] = [];
+  const hoistedTypeNames = new Set<string>();
+  // A schema const and the type named after it share a name by convention, so
+  // the const being compiled away is exactly when the type has to come over.
+  const entryTypeNames = new Set(
+    body.filter(ts.isTypeAliasDeclaration).map(statement => statement.name.text),
+  );
+  const valueReferences = valueReferencedNames(roots);
+  for (const [name, alias] of foreignTypes) {
+    // Only when nothing still uses the name as a value: otherwise the schema
+    // const is genuinely needed and the import has to stay.
+    if (!references.has(name) || valueReferences.has(name) || entryTypeNames.has(name)) continue;
+    hoistedTypes.push(expandInferText(
+      printer.printNode(ts.EmitHint.Unspecified, alias, alias.getSourceFile()),
+      schemaTypes,
+    ));
+    hoistedTypeNames.add(name);
+    // taken over here, so it no longer keeps the schema const or the import alive
+    references.delete(name);
+  }
+
   const retained = new Set<string>();
   for (let changed = true; changed; ) {
     changed = false;
@@ -1619,9 +1717,15 @@ const retainedSource = (
       if (retained.has(name) || !references.has(name)) continue;
       retained.add(name);
       changed = true;
-      for (const reference of referencedNames([declaration])) references.add(reference);
+      for (const reference of referencedNames([declaration], new Set(schemaTypes.keys()))) {
+        references.add(reference);
+      }
     }
   }
+  // A type alias imported from another module, once its Infer is expanded, has
+  // no reason to keep the import alive -- so it is written out here and the name
+  // stops counting as imported.
+
   const dropped = (name: string) =>
     name === appName || (usedSchemas.has(name) && !retained.has(name));
 
@@ -1629,6 +1733,8 @@ const retainedSource = (
   // but not the helpers they call. Those have to come with them or the output
   // references names it never declares -- which only shows up as a 500.
   const hoisted: string[] = [];
+  const hoistedStatements: ts.Statement[] = [];
+  const hoistedImports = new Map<string, Map<string, string>>();
   const provenance = new Map<string, string>();
   const foreign = new Map<ts.SourceFile, Set<string>>();
   for (const node of printedNodes) {
@@ -1681,14 +1787,53 @@ const retainedSource = (
     }
     for (const statement of file.statements) {
       if (!take.has(statement)) continue;
-      hoisted.push(
-        printer.printNode(
-          ts.EmitHint.Unspecified,
-          rewriteRelativeModule(statement, file.fileName, outputPath),
-          file,
-        ),
-      );
+      const rewritten = rewriteRelativeModule(statement, file.fileName, outputPath);
+      // Imports are collected rather than printed: two modules asking for the
+      // same binding would otherwise emit it twice, and a duplicate import
+      // binding is a syntax error.
+      if (
+        ts.isImportDeclaration(rewritten) &&
+        ts.isStringLiteral(rewritten.moduleSpecifier) &&
+        rewritten.importClause?.namedBindings &&
+        ts.isNamedImports(rewritten.importClause.namedBindings)
+      ) {
+        const specifier = rewritten.moduleSpecifier.text;
+        const names = hoistedImports.get(specifier) ?? new Map<string, string>();
+        for (const element of rewritten.importClause.namedBindings.elements) {
+          if (!visited.has(element.name.text)) continue;
+          const alias = element.propertyName ? `${element.propertyName.text} as ` : "";
+          const typeOnly = rewritten.importClause.phaseModifier === ts.SyntaxKind.TypeKeyword
+            || element.isTypeOnly;
+          names.set(element.name.text, `${typeOnly ? "type " : ""}${alias}${element.name.text}`);
+        }
+        if (names.size) hoistedImports.set(specifier, names);
+        continue;
+      }
+      hoistedStatements.push(statement);
+      hoisted.push(printer.printNode(ts.EmitHint.Unspecified, rewritten, file));
     }
+  }
+
+  // Hoisted helpers carry their own type names -- `present(row: Row): Task` --
+  // which the first pass could not see because it ran before they were taken.
+  // Writing the type out is better than importing it: the module it came from
+  // has its own dependencies, and this one does not need them.
+  for (const statement of hoistedStatements) {
+    for (const name of referencedNames([statement], new Set(schemaTypes.keys()))) {
+      const alias = foreignTypes.get(name);
+      if (!alias || hoistedTypeNames.has(name) || entryTypeNames.has(name)) continue;
+      hoistedTypes.push(expandInferText(
+        printer.printNode(ts.EmitHint.Unspecified, alias, alias.getSourceFile()),
+        schemaTypes,
+      ));
+      hoistedTypeNames.add(name);
+    }
+  }
+  for (const names of hoistedImports.values()) {
+    for (const name of hoistedTypeNames) names.delete(name);
+  }
+  for (const [specifier, names] of hoistedImports) {
+    if (!names.size) hoistedImports.delete(specifier);
   }
 
   return body
@@ -1708,7 +1853,8 @@ const retainedSource = (
             ?? (bindings && ts.isNamespaceImport(bindings) ? bindings.name.text : undefined);
           return bound && !references.has(bound) ? [] : [print(statement)];
         }
-        const kept = bindings.elements.filter(element => references.has(element.name.text));
+        const kept = bindings.elements.filter(element =>
+          references.has(element.name.text) && !hoistedTypeNames.has(element.name.text));
         if (!kept.length) return [];
         // the specifier has to come from the rewritten statement, or a relative
         // path ends up resolved against the wrong directory
@@ -1721,6 +1867,15 @@ const retainedSource = (
           const alias = element.propertyName ? `${element.propertyName.text} as ` : "";
           return `${!typeOnly && element.isTypeOnly ? "type " : ""}${alias}${element.name.text}`;
         });
+        const extra = hoistedImports.get(target);
+        if (extra) {
+          const already = new Set(kept.map(element => element.name.text));
+          for (const [name, text] of extra) {
+            if (already.has(name)) continue;
+            names.push(typeOnly ? text.replace(/^type /, "") : text);
+          }
+          hoistedImports.delete(target);
+        }
         return [
           `import ${typeOnly ? "type " : ""}{ ${names.join(", ")} } from ${JSON.stringify(target)};`,
         ];
@@ -1748,8 +1903,44 @@ const retainedSource = (
       }
       return [print(statement)];
     })
-    .concat(hoisted)
+    .concat(
+      [...hoistedImports].map(([specifier, names]) =>
+        `import { ${[...names.values()].join(", ")} } from ${JSON.stringify(specifier)};`),
+      hoistedTypes,
+      hoisted,
+    )
     .join("\n");
+};
+
+
+/**
+ * Hooks are inlined and called directly, so passing an argument a handler never
+ * declared is a type error in the file we just wrote. `app.onStop(() => ...)` is
+ * the normal way to write one.
+ */
+const callWith = (handler: HandlerNode, printed: string, argument: string) =>
+  handler.parameters.length ? `(${printed})(${argument})` : `(${printed})()`;
+
+
+/** Every name an `Infer<typeof X>` mentions, wherever it appears. */
+const inferredNames = (nodes: readonly ts.Node[]) => {
+  const names = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isTypeReferenceNode(node) &&
+      ts.isIdentifier(node.typeName) &&
+      node.typeName.text === "Infer" &&
+      node.typeArguments?.length === 1
+    ) {
+      const argument = node.typeArguments[0]!;
+      if (ts.isTypeQueryNode(argument) && ts.isIdentifier(argument.exprName)) {
+        names.add(argument.exprName.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  for (const node of nodes) visit(node);
+  return names;
 };
 
 const valueForContextKey = (
@@ -2001,7 +2192,7 @@ const generateRouteMethod = (
       return {
         code: [
           `async ${route.method}(${args}) {`,
-          `  await (${print(onRequest)})(req);`,
+          `  await ${callWith(onRequest, print(onRequest), "req")};`,
           `  return (${print(route.handler)})(${args});`,
           "},",
         ].join("\n"),
@@ -2242,7 +2433,7 @@ const generateCode = (
     if (websocket) {
       const async = hooks.onRequest ? "async " : "";
       routeLines.push(`      ${async}GET(req, server) {`);
-      if (hooks.onRequest) routeLines.push(`        await (${print(hooks.onRequest)})(req);`);
+      if (hooks.onRequest) routeLines.push(`        await ${callWith(hooks.onRequest, print(hooks.onRequest), "req")};`);
       routeLines.push(`        if (server.upgrade(req, { data: { route: ${websocket.index} } })) return;`);
       routeLines.push(`        return new Response("WebSocket Upgrade Required", { status: 426 });`);
       routeLines.push("      },");
@@ -2252,7 +2443,7 @@ const generateCode = (
   const fallbackLines: string[] = [
     `  ${hooks.onRequest ? "async " : ""}fetch(req) {`,
   ];
-  if (hooks.onRequest) fallbackLines.push(`    await (${print(hooks.onRequest)})(req);`);
+  if (hooks.onRequest) fallbackLines.push(`    await ${callWith(hooks.onRequest, print(hooks.onRequest), "req")};`);
   fallbackLines.push("    const path = new URL(req.url).pathname;");
   const fallbackMap = new Map<string, Array<{ method: HttpMethod }>>(
     [...groups].map(([path, group]) => [path, group]),
@@ -2296,7 +2487,9 @@ const generateCode = (
       websocketLines.push(`    ${name}(${parameters}) {`);
       websocketLines.push("      switch (ws.data.route) {");
       for (const { handler, index } of handlers) {
-        websocketLines.push(`        case ${index}: return (${print(handler)})(${argumentList});`);
+        // The return is discarded rather than returned: Bun types these as
+        // `void`, and socket.send() answers with the byte count.
+        websocketLines.push(`        case ${index}: { (${print(handler)})(${argumentList}); return; }`);
       }
       websocketLines.push("      }");
       websocketLines.push("    },");
@@ -2361,7 +2554,7 @@ ${fallbackLines.join("\n")}
 });`);
   const shutdown = hooks.onStop
     ? `    try {
-      await (${print(hooks.onStop)})(server);
+      await ${callWith(hooks.onStop, print(hooks.onStop), "server")};
     } finally {
       await server.stop();
     }`
@@ -2430,6 +2623,28 @@ export function compileSource(
   const parsed = withImportContext(modules, () =>
     parseRoutes(sourceFile, appName, warnings, modules));
   const { routes, globalHeaders, usedSchemas } = parsed;
+
+  // `Infer<typeof S>` is a type-only use of a schema that has otherwise been
+  // compiled into checks. Spelling the type out is what lets S be erased.
+  const schemaTypes = new Map<string, string>();
+  const inferCandidates = inferredNames([sourceFile, ...modules.typeAliases.values()]);
+  for (const name of new Set([...parsed.schemaNames, ...inferCandidates])) {
+    const initializer = modules.declarations.get(name);
+    if (!initializer) continue;
+    try {
+      schemaTypes.set(name, schemaToTypeText(parseSchemaExpression(
+        initializer,
+        modules.namespaces,
+        modules.declarations,
+        new Set(),
+        (code, message) => {
+          throw new CompileError(code, message);
+        },
+      )));
+    } catch {
+      // not a schema after all -- middleware and handlers share the same set
+    }
+  }
   const { hooks, websockets } = parseRuntime(sourceFile, appName);
   if (!routes.length && !websockets.length) {
     throw new CompileError("ORVOX_ROUTE_REQUIRED", "No routes were found.");
@@ -2461,6 +2676,8 @@ export function compileSource(
     outputPath,
     usedSchemas,
     printedNodes,
+    schemaTypes,
+    modules.typeAliases,
   );
   const manifestRoutes = routes.map(
     ({ handler: _handler, raw: _raw, middlewareNodes: _middlewareNodes, ...route }) => route,

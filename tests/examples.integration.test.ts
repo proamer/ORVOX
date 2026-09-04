@@ -144,3 +144,28 @@ test("media handles bytes, a stream, and a socket", async () => {
   });
   expect(seen).toEqual(["ready", "echo:hi"]);
 });
+
+test("every example compiles to a file that type-checks on its own", async () => {
+  // A generated server that runs but does not type-check is only half an
+  // artifact -- the whole point is that you can read and check the output.
+  for (const example of ["crud", "links", "tasks", "media"]) {
+    directory = await mkdtemp(join(root, `.orvox-types-${example}-`));
+    try {
+      const result = await compile(join(root, "examples", example, "src", "app.ts"), {
+        outDir: directory,
+      });
+      const check = Bun.spawnSync([
+        process.execPath, "x", "tsc",
+        "--noEmit", "--skipLibCheck", "--strict", "--allowImportingTsExtensions",
+        "--target", "esnext", "--module", "esnext", "--moduleResolution", "bundler",
+        "--types", "bun",
+        result.serverPath,
+      ], { cwd: root });
+      const output = new TextDecoder().decode(check.stdout) + new TextDecoder().decode(check.stderr);
+      expect([example, output.trim()]).toEqual([example, ""]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+      directory = undefined;
+    }
+  }
+}, 120_000);
